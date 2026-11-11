@@ -57,6 +57,7 @@
 #include "test_fft.c"
 #include "test_svd.c"
 #include "test_radial.c"
+#include "test_window.c"
 #include "test_weights.c"
 #include "test_alf.c"
 #include "test_alf_gsl.c"
@@ -81,6 +82,7 @@ main(void)
   test_fft();
   test_svd();
   test_radial();
+  test_window_shell();
   test_weights();
   test_alf();
   test_alf_gsl();

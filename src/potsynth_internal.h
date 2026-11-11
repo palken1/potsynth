@@ -247,6 +247,9 @@ void potsynth_sincos_m(const size_t m, const double phi, double * c, double * s)
 
 /* window.c */
 int potsynth_window_choose(const double eps, const double sigma);
+int potsynth_window_choose_shell(const double eps, const double sigma, const size_t L, const size_t nf,
+                                 const size_t lmin, const size_t nchan, const int * rpow, const double * wn,
+                                 const double u0, const double u1);
 void potsynth_gauss_legendre(const size_t n, double * x, double * w);
 int potsynth_window_ft(const size_t nk, const int w, const double beta, const double h, double * out);
 
