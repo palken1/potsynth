@@ -25,6 +25,11 @@ First public release.
   rank is raised until each quantity's own error is within tolerance, so a quantity much
   smaller than the others at high degree (e.g. the horizontal gravity gradients of
   EGM2008) is resolved as well as they are.
+- Window width chosen per quantity and shell: the table measured for the magnetic field
+  is a lower bound, and the width is raised where a quantity has its power near the band
+  edge (where the window's aliasing error is largest; e.g. the horizontal gravity
+  gradients) or the shell reaches inside r = a (u > 1), so that every quantity meets
+  `eps`. Requests like the magnetic field at satellite altitude keep the table's width.
 - Read-only model workspace shared between threads; evaluation does not allocate memory.
   OpenMP parallelism (optional).
 

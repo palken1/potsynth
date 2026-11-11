@@ -130,6 +130,20 @@ potsynth_fast_init(potsynth_workspace * w)
   potsynth_radial_weights(w, 1, wn);
   tol = potsynth_radial_tol(&(w->params));
 
+  /* window width: widen it where a quantity has more of its power near the band
+     edge than the table assumes, or the shell reaches inside r = a
+     (potsynth_window_choose_shell) */
+  if (w->params.w <= 0)
+    {
+      const size_t nmin = (size_t) ceil(w->sigma * nband);
+      const size_t nf = potsynth_next_smooth((nmin > 2 * (size_t) w->w) ? nmin : 2 * (size_t) w->w, 2);
+
+      w->w = potsynth_window_choose_shell(w->params.eps, w->sigma, L, nf, w->lmin, w->nchan, w->rpow,
+                                          wn, w->a / w->rmax, w->a / w->rmin);
+      w->beta = M_PI * (1.0 - 1.0 / (2.0 * w->sigma)) * w->w;
+      w->half = 0.5 * w->w;
+    }
+
   w->radial_workspace_p = potsynth_radial_alloc(w->a / w->rmax, w->a / w->rmin, w->lmin, L,
                                                 w->nchan, w->rpow, wn, tol);
   free(wn);
