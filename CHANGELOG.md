@@ -21,7 +21,10 @@ First public release.
 - Radial basis weighted by exact mean squares over the sphere (vector spherical
   harmonics): channels form quantities (scalar, horizontal vector, spin-2 tensor part),
   and `eps` is relative to the largest magnitude of each quantity, e.g. B_theta and
-  B_phi relative to max |B_h|. One radial basis bounds the error of every quantity.
+  B_phi relative to max |B_h|. One radial basis bounds the error of every quantity: its
+  rank is raised until each quantity's own error is within tolerance, so a quantity much
+  smaller than the others at high degree (e.g. the horizontal gravity gradients of
+  EGM2008) is resolved as well as they are.
 - Read-only model workspace shared between threads; evaluation does not allocate memory.
   OpenMP parallelism (optional).
 

@@ -111,9 +111,10 @@ where :math:`c_j` are the Lobatto weights: 1/2 at the end points and 1 otherwise
 reduced to the smallest degree whose truncation tail stays below tolerance.
 
 A one-sided Jacobi SVD, :math:`X = U S W^T`, gives singular values accurate to the
-level of rounding, which the machine-precision mode needs. The rank :math:`\rho` is the
-number of singular values above :math:`\tau_r s_1`, where :math:`\tau_r = 0.1\varepsilon`
-by default. Then:
+level of rounding, which the machine-precision mode needs. The rank :math:`\rho` starts
+as the number of singular values above :math:`\tau_r s_1`, where
+:math:`\tau_r = 0.1\varepsilon` by default, and is then raised until the error of each
+quantity on its own is within :math:`\tau_r` (see :ref:`radial-weights`). Then:
 
 .. math::
 
@@ -255,10 +256,36 @@ example only :math:`\partial_\theta\bar{P}`), the weights are still the exact me
 squares of each degree, but different degrees are not orthogonal, and the bound holds
 only approximately.
 
-This is a mean-square bound, whereas :math:`\varepsilon` is a maximum-norm target
-(see :ref:`accuracy`). The rank rule :math:`s_{\rho+1} \le 0.1\varepsilon\, s_1` and
-the window width are chosen so that the measured maximum error stays below
-:math:`\varepsilon`.
+**Per-quantity check.** The singular value rule :math:`s_{\rho+1} \le \tau_r s_1` bounds
+the error of all weighted functions together, with the largest weight over the
+quantities. A quantity whose size sits mostly in degrees where another quantity
+dominates the weights is then covered only on average: for EGM2008 at degree 2190, the
+horizontal gravity gradients (:math:`(T_{r\theta}, T_{r\phi})` and the spin-2 part) have
+their largest values 300--600 times below :math:`T_{rr}` and much more of their size at
+high degree, and with the singular value rule alone their maximum error reaches
+:math:`2.6\varepsilon` at :math:`\varepsilon = 10^{-6}`. The rank is therefore raised,
+one function at a time, until for every quantity :math:`q`
+
+.. math::
+
+   \max_j \Big( \sum_l W_{q,l}^2\, e_{p,l}(u_j)^2 \Big)^{1/2}
+   \le \tau_r \max_j \Big( \sum_l W_{q,l}^2\, u_j^{2(l+p)} \Big)^{1/2}:
+
+the root mean square over the sphere of its error at the worst node of the shell, at most
+:math:`\tau_r` times its largest root mean square in the shell. Both sides are exact by
+orthogonality, and the residuals :math:`e_{p,l}(u_j)` follow from the singular vectors at
+a cost of :math:`O(L K^2)` per quantity. :math:`\tau_r` is floored at
+:math:`16\,\epsilon_{\rm mach}`, below which the residuals are rounding. The check never
+lowers the rank. For LCS-1 on a Swarm shell it adds one function at about one tolerance in
+four; for EGM2008 it brings the horizontal gradients to the same root mean square error
+as the other quantities.
+
+These are mean-square bounds, whereas :math:`\varepsilon` is a maximum-norm target
+(see :ref:`accuracy`). The tolerance :math:`\tau_r = 0.1\varepsilon` and the window width
+are chosen so that the measured maximum error stays below :math:`\varepsilon`: the
+maximum over the sphere of the radial error exceeds its root mean square by up to a
+factor of about 10 for the high-degree gravity gradients of EGM2008, against about 2.4
+for :math:`g_r`.
 
 **Curl and divergence.** The approximation replaces :math:`u^{l+2}` in the radial
 and horizontal parts by the same function :math:`a_l(u) \approx u^{l+2}`. The result is
@@ -726,7 +753,7 @@ The fast method has three error sources:
 
 - the window, controlled by :math:`w`;
 - truncation of the radial SVD, controlled by :math:`\rho` (tolerance
-  :math:`0.1\varepsilon`);
+  :math:`0.1\varepsilon` for every quantity, see :ref:`radial-weights`);
 - floating-point rounding.
 
 The requested accuracy :math:`\varepsilon` is relative to the largest magnitude of each

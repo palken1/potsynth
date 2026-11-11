@@ -63,6 +63,8 @@ test_radial_error(const double u0, const double u1, const size_t lmin, const siz
   return emax / fmaxv;
 }
 
+static void test_radial_quantities(void);
+
 static void
 test_radial(void)
 {
@@ -112,4 +114,98 @@ test_radial(void)
 
       free(wn);
     }
+
+  test_radial_quantities();
+}
+
+/*
+test_radial_quantities()
+  Each quantity within tol on its own. Two quantities share a radial power, as
+the gravity gradient parts T_rr and the spin-2 part (T_tt - T_pp, 2 T_tp) do:
+T_rr is dominated by degree 0, the spin-2 part (which has no degrees 0 and 1)
+by degree 2, and both have a Kaula tail up to L = 2190 on a GOCE shell. The
+singular value rule alone gives rho = 4 at tol = 1e-7, with the error of the
+spin-2 part at 2.9 tol (with EGM2008 itself, the maximum error of that part
+reached 2.6 eps at eps = 1e-6).
+*/
+
+static void
+test_radial_quantities(void)
+{
+  const double a = 6378.1363, R = 6371.2;
+  const double u0 = a / (R + 281.0), u1 = a / (R + 220.0);
+  const size_t L = 2190, L1 = L + 1, ng = 400;
+  const double tols[] = { 1.0e-7, 1.0e-11 };
+  const int rpow[2] = { 3, 3 };
+  double * wn = malloc(2 * L1 * sizeof(double));
+  size_t it, l, c, g, i;
+
+  /* degree rms of the two parts at r = a: sigma_l = 1 (l = 0), 4.8e-4 (C20), 1e-5/l^2 */
+  for (l = 0; l <= L; ++l)
+    {
+      const double dl = (double) l;
+      const double sig = (l == 0) ? 1.0 : (l == 1) ? 0.0 : (l == 2) ? 4.8e-4 : 1.0e-5 / (dl * dl);
+      const double s2l = sqrt(2.0 * dl + 1.0) * sig;
+
+      wn[l] = (dl + 1.0) * (dl + 2.0) * s2l;                                            /* T_rr */
+      wn[L1 + l] = (l < 2) ? 0.0 : sqrt((dl - 1.0) * dl * (dl + 1.0) * (dl + 2.0)) * s2l; /* spin 2 */
+    }
+
+  for (c = 0; c < 2; ++c)
+    {
+      double norm = 0.0;
+
+      for (l = 0; l <= L; ++l)
+        norm += wn[c * L1 + l] * wn[c * L1 + l];
+      for (l = 0; l <= L; ++l)
+        wn[c * L1 + l] /= sqrt(norm);
+    }
+
+  for (it = 0; it < sizeof(tols) / sizeof(tols[0]); ++it)
+    {
+      potsynth_radial_workspace * w = potsynth_radial_alloc(u0, u1, 0, L, 2, rpow, wn, tols[it]);
+
+      ps_test(w == NULL, "radial quantities: tol=%g allocation", tols[it]);
+      if (w == NULL)
+        continue;
+
+      /* per quantity: max over the shell of the rms error over the sphere, relative to
+       * the largest rms in the shell */
+      for (c = 0; c < 2; ++c)
+        {
+          double emax2 = 0.0, fmax2 = 0.0;
+
+          for (g = 0; g <= ng; ++g)
+            {
+              const double u = u0 + (u1 - u0) * g / (double) ng;
+              double b[64], e2 = 0.0, f2 = 0.0;
+
+              for (i = 0; i < w->rho && i < 64; ++i)
+                b[i] = test_radial_eval(i, u, w);
+
+              for (l = 0; l <= L; ++l)
+                {
+                  const double f = pow(u, (double) l + rpow[c]);
+                  double approx = 0.0;
+
+                  for (i = 0; i < w->rho && i < 64; ++i)
+                    approx += w->beta[(c * w->rho + i) * L1 + l] * b[i];
+
+                  e2 += wn[c * L1 + l] * wn[c * L1 + l] * (approx - f) * (approx - f);
+                  f2 += wn[c * L1 + l] * wn[c * L1 + l] * f * f;
+                }
+
+              emax2 = fmax(emax2, e2);
+              fmax2 = fmax(fmax2, f2);
+            }
+
+          ps_test(sqrt(emax2 / fmax2) > 1.5 * tols[it],
+                  "radial quantities: tol=%g quantity %zu rho=%zu (error %.2e)",
+                  tols[it], c, w->rho, sqrt(emax2 / fmax2));
+        }
+
+      potsynth_radial_free(w);
+    }
+
+  free(wn);
 }

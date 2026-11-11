@@ -49,6 +49,9 @@ static double radial_sample(const double uc, const double ud, radial_state_t * s
 static int radial_build(const size_t lmin, const size_t lmax, const size_t nchan, const int * rpow,
                         const double * wn, const double tol, const int maxpow,
                         potsynth_radial_workspace * w, radial_state_t * state);
+static int radial_rank_check(const size_t lmin, const size_t lmax, const size_t nchan, const int * rpow,
+                             const double * wn, const double tol, const radial_state_t * state,
+                             size_t * rho);
 
 /*
 potsynth_radial_alloc()
@@ -591,6 +594,12 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nchan, const int
   if (rho == 0)
     rho = 1;
 
+  /* the rank above bounds the error of all quantities together; raise it until
+   * each quantity's own error is within tol */
+  status = radial_rank_check(lmin, lmax, nchan, rpow, wn, tol, state, &rho);
+  if (status)
+    return status;
+
   /* basis functions b_i(u_j) = U_ji / sqrt(c_j), U_ji = V[i*(K+1) + j] */
   w->basis = potsynth_aligned_calloc(rho * (K + 1) * sizeof(double));
   w->beta = potsynth_aligned_calloc(nchan * rho * L1 * sizeof(double));
@@ -648,6 +657,140 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nchan, const int
             }
         }
     }
+
+  return POTSYNTH_SUCCESS;
+}
+
+/*
+radial_rank_check()
+  Smallest rank, at least *rho, at which the radial error of each quantity is
+within tol of its own size
+
+Inputs: lmin   - minimum SH degree
+        lmax   - maximum SH degree
+        nchan  - number of channels
+        rpow   - radial power offsets, length nchan
+        wn     - weights, wn[c*(lmax+1) + l]
+        tol    - truncation tolerance
+        state  - state after the SVD (nodes, Lobatto weights, V)
+        rho    - (input/output) rank
+
+Notes:
+1) A quantity is a set of channels with the same radial power and weights.
+By orthogonality, the rms over the sphere of its error at node u_j is
+E(u_j) = (sum_l wn_l^2 e_l(u_j)^2)^(1/2), with e_l the residual of u^(l+rpow)
+after projection onto the first rho basis functions; its rms at u_j is
+F(u_j) = (sum_l wn_l^2 u_j^(2(l+rpow)))^(1/2). The rank is raised until
+max_j E(u_j) <= tol * max_j F(u_j) for every quantity: the worst radius of
+the shell, relative to the largest size of the quantity in the shell.
+2) The singular value rule bounds only the error of all functions together,
+weighted by the largest weight over the quantities, so a quantity much smaller
+than the others at high degree (e.g. the horizontal gravity gradients) can
+exceed it.
+3) tol is floored at 16 DBL_EPSILON, below which the residuals are rounding.
+*/
+
+static int
+radial_rank_check(const size_t lmin, const size_t lmax, const size_t nchan, const int * rpow,
+                  const double * wn, const double tol, const radial_state_t * state,
+                  size_t * rho)
+{
+  const size_t L1 = lmax + 1;
+  const size_t K1 = state->K + 1;
+  const double tq = fmax(tol, 16.0 * DBL_EPSILON);
+  double * err2 = malloc((K1 + 1) * K1 * sizeof(double)); /* err2[r*K1 + j]: E(u_j)^2 at rank r */
+  double * res = malloc(K1 * sizeof(double));
+  double * den = malloc(K1 * sizeof(double));
+  size_t c, c2, j, l, r, need = *rho;
+
+  if (!err2 || !res || !den)
+    {
+      free(err2);
+      free(res);
+      free(den);
+      POTSYNTH_ERROR ("unable to allocate rank check arrays", POTSYNTH_ENOMEM);
+    }
+
+  for (c = 0; c < nchan; ++c)
+    {
+      const double * wc = wn + c * L1;
+      double fmax2 = 0.0;
+      int seen = 0;
+
+      for (c2 = 0; c2 < c; ++c2)
+        {
+          if (rpow[c2] == rpow[c] &&
+              memcmp(wn + c2 * L1 + lmin, wc + lmin, (L1 - lmin) * sizeof(double)) == 0)
+            seen = 1;
+        }
+
+      if (seen)
+        continue; /* same quantity as an earlier channel */
+
+      memset(err2, 0, (K1 + 1) * K1 * sizeof(double));
+      memset(den, 0, K1 * sizeof(double));
+
+      for (l = lmin; l <= lmax; ++l)
+        {
+          const double w2 = wc[l] * wc[l];
+
+          if (w2 == 0.0)
+            continue;
+
+          /* residual of sqrt(c_j) u_j^(l+rpow), removing the basis vectors one at a time */
+          for (j = 0; j < K1; ++j)
+            {
+              const double f = pow(state->uj[j], (double) l + rpow[c]);
+
+              res[j] = state->sq[j] * f;
+              den[j] += w2 * f * f;
+            }
+
+          for (r = 0; r <= K1; ++r)
+            {
+              const double * v = state->V + r * K1;
+              double beta = 0.0;
+
+              if (r >= *rho)
+                {
+                  for (j = 0; j < K1; ++j)
+                    err2[r * K1 + j] += w2 * res[j] * res[j] / (state->sq[j] * state->sq[j]);
+                }
+
+              if (r == K1)
+                break;
+
+              for (j = 0; j < K1; ++j)
+                beta += v[j] * res[j];
+
+              for (j = 0; j < K1; ++j)
+                res[j] -= beta * v[j];
+            }
+        }
+
+      for (j = 0; j < K1; ++j)
+        fmax2 = fmax(fmax2, den[j]);
+
+      for (r = *rho; r <= K1; ++r)
+        {
+          double emax2 = 0.0;
+
+          for (j = 0; j < K1; ++j)
+            emax2 = fmax(emax2, err2[r * K1 + j]);
+
+          if (emax2 <= tq * tq * fmax2 || r == K1)
+            {
+              need = (r > need) ? r : need;
+              break;
+            }
+        }
+    }
+
+  free(err2);
+  free(res);
+  free(den);
+
+  *rho = need;
 
   return POTSYNTH_SUCCESS;
 }
