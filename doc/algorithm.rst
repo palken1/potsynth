@@ -768,8 +768,19 @@ very different size, such as a potential and its gradient, are each resolved to
 axes. A component can be much smaller than its quantity only because of the axes, for
 example :math:`g_\phi` against :math:`g_\theta` when the model contains the flattening
 term :math:`C_{20}`; its error is then larger than :math:`\varepsilon` relative to its own
-maximum. The window width is the smallest :math:`w` whose *measured* error is
-below :math:`\varepsilon`. The measurements below are against 19-digit reference values,
+maximum. The window width is at least the smallest :math:`w` whose *measured* error is
+below :math:`\varepsilon` (table below), and is raised for a given model and shell
+where needed: the window sum returns a Fourier mode :math:`k` with relative aliasing
+error :math:`E(k) = \sum_{j\ne0} |\hat\phi(k + j n_f)| / \hat\phi(k)`, nearly flat over
+most of the band but some 30 times larger at its edge :math:`|k| = L`. The table was
+measured for the magnetic field at satellite altitude, whose power lies well inside the
+band. For each quantity, the set-up bounds the rms window error at the Chebyshev points
+of the shell by :math:`(\sum_l w_l^2 u^{2(l+p)} \bar E_l^2)^{1/2}`, with
+:math:`\bar E_l = 2\max_{k\le l} E(k)`, and raises :math:`w` until half this bound,
+relative to the quantity's largest rms in the shell, is below :math:`\varepsilon`. This
+covers quantities with their power near the band edge (the horizontal gravity
+gradients) and shells that reach inside :math:`r = a`, where the highest degrees grow as
+:math:`u^l`. The measurements below are against 19-digit reference values,
 taking the worst case over :math:`L = 13` and :math:`L = 185` and over a satellite shell
 and a thick shell:
 
