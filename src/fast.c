@@ -836,14 +836,16 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
 
 /*
 potsynth_radial_tol()
-  Relative tolerance of the radial rank truncation: rank_tol, or 0.1 eps by
-default (the rest of the error budget goes to the window), and at least 1e-16
+  Relative tolerance of the radial step: rank_tol, or eps/2 by default (the
+other half of the error budget goes to the window), and at least 1e-16. The
+radial basis bounds the maximum of each quantity's radial error over the shell
+by it (see radial_rank_check() in radial.c)
 */
 
 double
 potsynth_radial_tol(const potsynth_parameters * params)
 {
-  const double tol = (params->rank_tol > 0.0) ? params->rank_tol : 0.1 * params->eps;
+  const double tol = (params->rank_tol > 0.0) ? params->rank_tol : 0.5 * params->eps;
   return (tol < 1.0e-16) ? 1.0e-16 : tol;
 }
 
@@ -919,4 +921,264 @@ floor_mod(const long a, const long n)
 {
   const long r = a % n;
   return (r < 0) ? r + n : r;
+}
+
+/*
+potsynth_fast_check()
+  Largest error of any irreducible component of the fast method, against the
+direct sum, at points chosen where the window error is likely to be largest,
+relative to the component's largest magnitude at the points
+
+Inputs: w - workspace after potsynth_fast_init()
+
+Return: worst error ratio (0 if the check could not be made)
+
+Notes:
+1) The window error is largest where the field has most of its power near the
+band edge, which for a real model is local (mountains, a buried mass). For each
+channel, the CHECK_TOP grid nodes with the largest five-point Laplacian of the
+channel at the bottom of the shell (where the highest degrees are largest) are
+taken, and around each the four cell midpoints (half a grid step from the nodes
+in both angles, where the window error of a band-edge mode peaks), at the bottom,
+middle and top of the shell. CHECK_NRAND points uniform in the shell are added
+for the sizes of the components.
+2) The candidate scan is split over the threads, each keeping its own
+CHECK_TOP list per channel; the lists are merged afterwards, so the result does
+not depend on the number of threads (ties apart).
+3) A component is a set of channels with the same radial power and field family
+(eq. 10 of the paper): its error and size at a point are the lengths of the
+vectors its channels form, with the spin-2 B channel counted twice.
+*/
+
+#define CHECK_TOP   16
+#define CHECK_NRAND 256
+
+double
+potsynth_fast_check(potsynth_workspace * w)
+{
+  const size_t nchan = w->nchan, rho = w->radial_workspace_p->rho, nchp = w->nchp;
+  const size_t nc = w->radial_workspace_p->ncheb;
+  const long rlast = (long) floor(M_PI * w->inv_h1);
+  const int nth = (w->nthreads > 0) ? w->nthreads : 1;
+  size_t ntop = nchan * CHECK_TOP, npt, i, c, k;
+  double * tops = calloc(ntop * (size_t) nth, sizeof(double));
+  long * topr = calloc(ntop * (size_t) nth, sizeof(long)), * topc = calloc(ntop * (size_t) nth, sizeof(long));
+  double * b1 = malloc(rho * sizeof(double));
+  double * r = NULL, * th = NULL, * ph = NULL, * of = NULL, * od = NULL;
+  double * omap = w->omap;
+  int method = w->method;
+  int * grp = malloc(nchan * sizeof(int));
+  double * gwt = malloc(nchan * sizeof(double));
+  int ngrp = 0;
+  double worst = 0.0;
+  potsynth_eval_workspace * ew;
+  long row;
+  int th0;
+
+  if (!tops || !topr || !topc || !b1 || !grp || !gwt)
+    goto done;
+
+  /* b_i at the bottom of the shell (t = +1: all T_k = 1) */
+  for (i = 0; i < rho; ++i)
+    {
+      double s = 0.0;
+      for (k = 0; k < nc; ++k)
+        s += w->radial_workspace_p->basis[i * nc + k];
+      b1[i] = (w->radial_workspace_p->ud > 0.0) ? s : w->radial_workspace_p->basis[i * nc];
+    }
+
+  /* candidates: largest |Laplacian| of each channel at r = rmin, one list per thread */
+#pragma omp parallel for private(row) schedule(static) num_threads(nth)
+  for (row = 1; row < rlast; ++row)
+    {
+#ifdef _OPENMP
+      const size_t base = (size_t) omp_get_thread_num() * ntop;
+#else
+      const size_t base = 0;
+#endif
+      long col;
+      size_t cc;
+      for (col = 0; col < (long) w->nf2; ++col)
+        {
+          for (cc = 0; cc < nchan; ++cc)
+            {
+              const long dr[5] = { 0, -1, 1, 0, 0 }, dc[5] = { 0, 0, 0, -1, 1 };
+              double v[5];
+              size_t q, ii, slot = base + cc * CHECK_TOP, jmin = 0;
+              double lap;
+
+              for (q = 0; q < 5; ++q)
+                {
+                  const double * g = w->grid + ((size_t) (row + dr[q] - w->row_lo) * w->ncols +
+                                                (size_t) (col + dc[q] - w->col_lo)) * nchp + cc * rho;
+                  double s = 0.0;
+                  for (ii = 0; ii < rho; ++ii)
+                    s += b1[ii] * g[ii];
+                  v[q] = s;
+                }
+
+              lap = fabs(v[1] + v[2] + v[3] + v[4] - 4.0 * v[0]);
+              for (q = 1; q < CHECK_TOP; ++q)
+                if (tops[slot + q] < tops[slot + jmin])
+                  jmin = q;
+              if (lap > tops[slot + jmin])
+                {
+                  tops[slot + jmin] = lap;
+                  topr[slot + jmin] = row;
+                  topc[slot + jmin] = col;
+                }
+            }
+        }
+    }
+
+  /* merge the threads' lists into the first */
+  for (th0 = 1; th0 < nth; ++th0)
+    {
+      const size_t base = (size_t) th0 * ntop;
+      for (c = 0; c < nchan; ++c)
+        {
+          size_t q, q2;
+          for (q = 0; q < CHECK_TOP; ++q)
+            {
+              const size_t src = base + c * CHECK_TOP + q;
+              size_t jmin = c * CHECK_TOP;
+              for (q2 = 1; q2 < CHECK_TOP; ++q2)
+                if (tops[c * CHECK_TOP + q2] < tops[jmin])
+                  jmin = c * CHECK_TOP + q2;
+              if (tops[src] > tops[jmin])
+                {
+                  tops[jmin] = tops[src];
+                  topr[jmin] = topr[src];
+                  topc[jmin] = topc[src];
+                }
+            }
+        }
+    }
+
+  /* points */
+  npt = ntop * 12 + CHECK_NRAND;
+  r = malloc(npt * sizeof(double));
+  th = malloc(npt * sizeof(double));
+  ph = malloc(npt * sizeof(double));
+  of = malloc(nchan * npt * sizeof(double));
+  od = malloc(nchan * npt * sizeof(double));
+  if (!r || !th || !ph || !of || !od)
+    goto done;
+
+  {
+    const double rad[3] = { w->rmin, 0.5 * (w->rmin + w->rmax), w->rmax };
+    unsigned long long s = 88172645463325252ULL;
+    size_t n = 0, t, d, q;
+
+    for (t = 0; t < ntop; ++t)
+      {
+        if (tops[t] <= 0.0)
+          continue;
+        for (d = 0; d < 4; ++d)
+          {
+            const double tt = (topr[t] + ((d & 1) ? 0.5 : -0.5)) * w->h1;
+            const double pp = (topc[t] + ((d & 2) ? 0.5 : -0.5)) * w->h2;
+            if (tt < 0.0 || tt > M_PI)
+              continue;
+            for (q = 0; q < 3; ++q)
+              {
+                r[n] = rad[q];
+                th[n] = tt;
+                ph[n] = pp;
+                ++n;
+              }
+          }
+      }
+
+    for (t = 0; t < CHECK_NRAND; ++t)
+      {
+        double x[3];
+        for (q = 0; q < 3; ++q)
+          {
+            s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+            x[q] = (double) (s >> 11) / 9007199254740992.0;
+          }
+        r[n] = cbrt(pow(w->rmin, 3) + x[0] * (pow(w->rmax, 3) - pow(w->rmin, 3)));
+        th[n] = acos(1.0 - 2.0 * x[1]);
+        ph[n] = 2.0 * M_PI * x[2];
+        ++n;
+      }
+    npt = n;
+  }
+
+  /* fast, then direct (channel values: no output map) */
+  w->omap = NULL;
+  ew = potsynth_eval_alloc(0, w);
+  if (ew == NULL || potsynth_eval(npt, r, th, ph, of, ew))
+    {
+      if (ew) potsynth_eval_free(ew);
+      w->omap = omap;
+      goto done;
+    }
+  potsynth_eval_free(ew);
+
+  if (potsynth_direct_init(w) == POTSYNTH_SUCCESS)
+    {
+      w->method = POTSYNTH_METHOD_DIRECT;
+      ew = potsynth_eval_alloc(0, w);
+      if (ew == NULL || potsynth_eval(npt, r, th, ph, od, ew))
+        worst = -1.0;
+      if (ew) potsynth_eval_free(ew);
+      w->method = method;
+    }
+  else
+    worst = -1.0;
+  potsynth_direct_free(w);
+  w->doff = NULL; w->tcol = NULL; w->tpost = NULL; w->tchan = NULL; w->dW = NULL;
+  w->omap = omap;
+  if (worst < 0.0)
+    {
+      worst = 0.0;
+      goto done;
+    }
+
+  /* components */
+  for (c = 0; c < nchan; ++c)
+    {
+      const int fam = op_family(w->theta_op[c], w->dphi[c]);
+      size_t c2;
+      grp[c] = -1;
+      gwt[c] = (fam == 2 && w->theta_op[c] == POTSYNTH_THETA_S2B) ? 2.0 : 1.0;
+      for (c2 = 0; c2 < c && fam >= 0; ++c2)
+        if (w->rpow[c2] == w->rpow[c] && op_family(w->theta_op[c2], w->dphi[c2]) == fam)
+          {
+            grp[c] = grp[c2];
+            break;
+          }
+      if (grp[c] < 0)
+        grp[c] = ngrp++;
+    }
+
+  {
+    int g;
+    for (g = 0; g < ngrp; ++g)
+      {
+        double emax = 0.0, vmax = 0.0;
+        for (i = 0; i < npt; ++i)
+          {
+            double e2 = 0.0, v2 = 0.0;
+            for (c = 0; c < nchan; ++c)
+              {
+                if (grp[c] != g)
+                  continue;
+                e2 += gwt[c] * gwt[c] * (of[c * npt + i] - od[c * npt + i]) * (of[c * npt + i] - od[c * npt + i]);
+                v2 += gwt[c] * gwt[c] * od[c * npt + i] * od[c * npt + i];
+              }
+            emax = fmax(emax, sqrt(e2));
+            vmax = fmax(vmax, sqrt(v2));
+          }
+        if (vmax > 0.0)
+          worst = fmax(worst, emax / vmax);
+      }
+  }
+
+done:
+  free(tops); free(topr); free(topc); free(b1); free(grp); free(gwt);
+  free(r); free(th); free(ph); free(of); free(od);
+  return worst;
 }

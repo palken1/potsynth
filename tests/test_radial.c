@@ -64,6 +64,7 @@ test_radial_error(const double u0, const double u1, const size_t lmin, const siz
 }
 
 static void test_radial_quantities(void);
+static void test_radial_surface(void);
 
 static void
 test_radial(void)
@@ -116,6 +117,7 @@ test_radial(void)
     }
 
   test_radial_quantities();
+  test_radial_surface();
 }
 
 /*
@@ -202,6 +204,97 @@ test_radial_quantities(void)
           ps_test(sqrt(emax2 / fmax2) > 1.5 * tols[it],
                   "radial quantities: tol=%g quantity %zu rho=%zu (error %.2e)",
                   tols[it], c, w->rho, sqrt(emax2 / fmax2));
+        }
+
+      potsynth_radial_free(w);
+    }
+
+  free(wn);
+}
+
+/*
+test_radial_surface()
+  Pointwise radial error on a thin shell reaching inside r = a, at high degree:
+g_r and g_h of a Kaula model to L = 2190 (with C20), from 21 km inside r = a to
+10 km above it, as for Earth's topographic surface. Over this shell u^(l+2)
+varies by a factor of about 1800 at l = 2190. The largest error of a degree-l
+part anywhere on the sphere is sqrt(2l+1) times its rms (addition theorem), so
+the radial error of a quantity at u is at most
+B(u) = sum_l sqrt(2l+1) wn_l |u^(l+p) - sum_i beta_il b_i(u)|, here evaluated at
+2001 radii (between the SVD nodes too) and required to be within tol of the
+quantity's largest rms in the shell. With the rms rank check and the Chebyshev
+degree chosen from the summed tails (potsynth 9558b56), B reached about 10 tol
+for g_h at tol = 5e-7 (EGM2008 itself: 5.1 eps for g_h at eps = 1e-6 on the
+ETOPO 2022 surface).
+*/
+
+static void
+test_radial_surface(void)
+{
+  const double a = 6378.1363;
+  const double u0 = a / (a + 10.0), u1 = a / (a - 21.0);
+  const size_t L = 2190, L1 = L + 1, ng = 2000;
+  const double tol = 5.0e-7;
+  const int rpow[2] = { 2, 2 };
+  double * wn = malloc(2 * L1 * sizeof(double));
+  potsynth_radial_workspace * w;
+  size_t l, c, g, i;
+
+  for (l = 0; l <= L; ++l)
+    {
+      const double dl = (double) l;
+      const double sig = (l == 0) ? 1.0 : (l == 1) ? 0.0 : (l == 2) ? 4.8e-4 : 1.0e-5 / (dl * dl);
+      const double s2l = sqrt(2.0 * dl + 1.0) * sig;
+
+      wn[l] = (dl + 1.0) * s2l;                          /* g_r */
+      wn[L1 + l] = sqrt(dl * (dl + 1.0)) * s2l;          /* g_h */
+    }
+
+  for (c = 0; c < 2; ++c)
+    {
+      double norm = 0.0;
+
+      for (l = 0; l <= L; ++l)
+        norm += wn[c * L1 + l] * wn[c * L1 + l];
+      for (l = 0; l <= L; ++l)
+        wn[c * L1 + l] /= sqrt(norm);
+    }
+
+  w = potsynth_radial_alloc(u0, u1, 0, L, 2, rpow, wn, tol);
+  ps_test(w == NULL, "radial surface: allocation");
+  if (w != NULL)
+    {
+      for (c = 0; c < 2; ++c)
+        {
+          double bmax = 0.0, fmax2 = 0.0;
+
+          for (g = 0; g <= ng; ++g)
+            {
+              const double u = u0 + (u1 - u0) * g / (double) ng;
+              double b[64], bsum = 0.0, f2 = 0.0;
+
+              for (i = 0; i < w->rho && i < 64; ++i)
+                b[i] = test_radial_eval(i, u, w);
+
+              for (l = 0; l <= L; ++l)
+                {
+                  const double f = pow(u, (double) l + rpow[c]);
+                  double approx = 0.0;
+
+                  for (i = 0; i < w->rho && i < 64; ++i)
+                    approx += w->beta[(c * w->rho + i) * L1 + l] * b[i];
+
+                  bsum += sqrt(2.0 * l + 1.0) * wn[c * L1 + l] * fabs(approx - f);
+                  f2 += wn[c * L1 + l] * wn[c * L1 + l] * f * f;
+                }
+
+              bmax = fmax(bmax, bsum);
+              fmax2 = fmax(fmax2, f2);
+            }
+
+          ps_test(bmax / sqrt(fmax2) > tol,
+                  "radial surface: quantity %zu rho=%zu ncheb=%zu (pointwise bound %.2e, tol %.0e)",
+                  c, w->rho, w->ncheb, bmax / sqrt(fmax2), tol);
         }
 
       potsynth_radial_free(w);

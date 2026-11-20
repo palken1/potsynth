@@ -25,11 +25,21 @@ First public release.
   rank is raised until each quantity's own error is within tolerance, so a quantity much
   smaller than the others at high degree (e.g. the horizontal gravity gradients of
   EGM2008) is resolved as well as they are.
+- The radial step bounds the maximum of each quantity's error over the sphere, not its
+  root mean square: by the addition theorem a degree-l part is at most sqrt(2l+1) times
+  its rms anywhere. The rank and the Chebyshev degree are chosen with this bound within
+  eps/2 (default `rank_tol`, was 0.1 eps), checked between the radial nodes too, with
+  rounding-floor tests at high accuracy. This fixes errors of up to 50 eps for EGM2008
+  on Earth's topographic surface (shells reaching inside r = a); satellite shells need
+  one or two more radial functions.
 - Window width chosen per quantity and shell: the table measured for the magnetic field
   is a lower bound, and the width is raised where a quantity has its power near the band
   edge (where the window's aliasing error is largest; e.g. the horizontal gravity
   gradients) or the shell reaches inside r = a (u > 1), so that every quantity meets
   `eps`. Requests like the magnetic field at satellite altitude keep the table's width.
+  After the set-up, an automatically chosen width is checked against the direct sum at
+  the points where its error is likely to be largest, and widened if any quantity
+  exceeds `eps`.
 - Read-only model workspace shared between threads; evaluation does not allocate memory.
   OpenMP parallelism (optional).
 

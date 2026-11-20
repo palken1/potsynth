@@ -220,7 +220,32 @@ potsynth_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const do
     }
 
   if (w->method == POTSYNTH_METHOD_FAST)
-    status = potsynth_fast_init(w);
+    {
+      status = potsynth_fast_init(w);
+
+      /* check the chosen window against the direct sum at points where its error is
+       * likely to be largest (potsynth_fast_check()); widen it while the error
+       * exceeds eps (automatic width only) */
+      if (status == POTSYNTH_SUCCESS && w->params.w <= 0)
+        {
+          int iter;
+          for (iter = 0; iter < 4; ++iter)
+            {
+              const double ratio = potsynth_fast_check(w);
+              if (ratio <= w->params.eps || w->w >= POTSYNTH_WMAX)
+                break;
+              potsynth_aligned_free(w->grid);
+              w->grid = NULL;
+              potsynth_radial_free(w->radial_workspace_p);
+              w->radial_workspace_p = NULL;
+              w->params.w = w->w + 1;
+              status = potsynth_fast_init(w);
+              w->params.w = 0;
+              if (status)
+                break;
+            }
+        }
+    }
   else
     status = potsynth_direct_init(w);
 

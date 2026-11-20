@@ -166,7 +166,7 @@ Parameters
 
    .. c:member:: double rank_tol
 
-      Tolerance of the radial SVD; 0 means :math:`0.1\,\varepsilon`.
+      Tolerance of the radial SVD; 0 means :math:`0.5\,\varepsilon`.
 
    .. c:member:: size_t npts_hint
 

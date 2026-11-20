@@ -101,7 +101,7 @@ typedef struct
   int method;           /* POTSYNTH_METHOD_xxx, default POTSYNTH_METHOD_AUTO */
   double sigma;         /* grid oversampling factor; 0 = default (2) */
   int w;                /* window width; 0 = chosen from eps */
-  double rank_tol;      /* radial SVD tolerance; 0 = 0.1 * eps */
+  double rank_tol;      /* radial SVD tolerance; 0 = 0.5 * eps */
   int nthreads;         /* OpenMP threads; 0 = all available */
   size_t npts_hint;     /* expected number of evaluation points, used by METHOD_AUTO to
                            choose the faster method including set-up; 0 = unknown */

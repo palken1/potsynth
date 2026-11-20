@@ -107,14 +107,20 @@ the size of each degree in the field (see :ref:`radial-weights`), form the matri
 
 where :math:`c_j` are the Lobatto weights: 1/2 at the end points and 1 otherwise.
 
-:math:`K` is increased until the Chebyshev series of all functions are resolved, then
-reduced to the smallest degree whose truncation tail stays below tolerance.
+:math:`K` is doubled until the Chebyshev series of all functions are resolved, then
+reduced to the smallest degree whose truncation tail stays below tolerance. Both tests
+weight the tail of degree :math:`l` by :math:`\sqrt{2l+1}` (the factor that bounds its
+maximum over the sphere, see :ref:`radial-weights`) and compare the sum with half of
+:math:`\tau_r` times the largest root mean square of all functions together at a node.
+The doubling also stops when it no longer cuts the tail by 4 times: the tail is then
+rounding, and the previous :math:`K` is kept.
 
 A one-sided Jacobi SVD, :math:`X = U S W^T`, gives singular values accurate to the
 level of rounding, which the machine-precision mode needs. The rank :math:`\rho` starts
 as the number of singular values above :math:`\tau_r s_1`, where
-:math:`\tau_r = 0.1\varepsilon` by default, and is then raised until the error of each
-quantity on its own is within :math:`\tau_r` (see :ref:`radial-weights`). Then:
+:math:`\tau_r = \varepsilon/2` by default, and is then raised until a bound on the
+maximum error of each quantity on its own is within :math:`\tau_r/2` at the nodes and
+:math:`\tau_r` between them (see :ref:`radial-weights`). Then:
 
 .. math::
 
@@ -126,9 +132,10 @@ product. Each :math:`b_i` is stored as a Chebyshev series in
 :math:`t = (u-u_c)/u_d \in [-1,1]`, so evaluating all :math:`\rho` radial values at a
 point costs about :math:`\rho K` operations.
 
-For a satellite shell (250--800 km), :math:`\rho = 5` gives :math:`10^{-6}` accuracy
-and :math:`\rho \approx 12` gives :math:`10^{-14}`. Thicker shells need more radial
-functions: :math:`r \in [a, 2a]` needs :math:`\rho \approx 23` at :math:`10^{-14}`. When
+For a satellite shell (250--800 km), :math:`\rho = 7` gives :math:`10^{-6}` for the
+magnetic field of LCS-1 and :math:`\rho = 10` gives :math:`10^{-13}`; EGM2008 to degree
+2190 needs 9--13 on the same shell. Thicker shells need more radial functions:
+:math:`r \in [a, 2a]` needs :math:`\rho = 27` at :math:`10^{-14}` for LCS-1. When
 :math:`r_{\min} = r_{\max}` a single constant function is used.
 
 .. _radial-weights:
@@ -268,24 +275,41 @@ one function at a time, until for every quantity :math:`q`
 
 .. math::
 
-   \max_j \Big( \sum_l W_{q,l}^2\, e_{p,l}(u_j)^2 \Big)^{1/2}
-   \le \tau_r \max_j \Big( \sum_l W_{q,l}^2\, u_j^{2(l+p)} \Big)^{1/2}:
+   \max_j \sum_l \sqrt{2l+1}\, W_{q,l}\, |e_{p,l}(u_j)|
+   \le \frac{\tau_r}{2} \max_j \Big( \sum_l W_{q,l}^2\, u_j^{2(l+p)} \Big)^{1/2},
 
-the root mean square over the sphere of its error at the worst node of the shell, at most
-:math:`\tau_r` times its largest root mean square in the shell. Both sides are exact by
-orthogonality, and the residuals :math:`e_{p,l}(u_j)` follow from the singular vectors at
-a cost of :math:`O(L K^2)` per quantity. :math:`\tau_r` is floored at
-:math:`16\,\epsilon_{\rm mach}`, below which the residuals are rounding. The check never
-lowers the rank. For LCS-1 on a Swarm shell it adds one function at about one tolerance in
-four; for EGM2008 it brings the horizontal gradients to the same root mean square error
-as the other quantities.
+where :math:`e_{p,l}(u_j)` is the residual of :math:`u_j^{l+p}` after projection onto the
+first :math:`\rho` functions. By the addition theorem,
+:math:`\sum_m |{}_sY_{lm}|^2 = (2l+1)/4\pi` at every point of the sphere, also for the
+spin-weighted harmonics of the vector and tensor quantities, so a degree-:math:`l` part
+with root mean square :math:`W_{q,l}` over the sphere is at most
+:math:`\sqrt{2l+1}\,W_{q,l}` anywhere on it. The left side therefore bounds the maximum
+of the radial error of :math:`q` over the sphere at the worst node, in any coordinate
+system, and the right side is its largest root mean square in the shell, which is at most
+its largest magnitude. The residuals follow from the singular vectors at a cost of
+:math:`O(L K^2)` per quantity. :math:`\tau_r` is floored at
+:math:`16\,\epsilon_{\rm mach}`, below which the residuals are rounding, and a rank is
+also accepted when the bound is within 4 times its rounding floor, or has not fallen by 4
+times over the next 10 ranks (truncation errors fall by about ten per rank, rounding does
+not). The check never lowers the rank.
 
-These are mean-square bounds, whereas :math:`\varepsilon` is a maximum-norm target
-(see :ref:`accuracy`). The tolerance :math:`\tau_r = 0.1\varepsilon` and the window width
-are chosen so that the measured maximum error stays below :math:`\varepsilon`: the
-maximum over the sphere of the radial error exceeds its root mean square by up to a
-factor of about 10 for the high-degree gravity gradients of EGM2008, against about 2.4
-for :math:`g_r`.
+The residual peaks between the nodes, mostly next to the ends of the shell. After the
+build, the same bound is therefore evaluated with the final basis, as a Chebyshev series,
+at :math:`8 n_{\rm cheb} + 1` points of the shell. While it exceeds :math:`\tau_r`, the
+rank tolerance is tightened by the excess and :math:`K` doubled, until the bound meets
+:math:`\tau_r` or stops falling by at least 2 times (its rounding floor, which for
+EGM2008 on a shell reaching 21 km below :math:`r = a` is about :math:`4\times10^{-10}`).
+
+An earlier version bounded the root mean square in place of the maximum, with
+:math:`\tau_r = 0.1\varepsilon`, and compared summed (not root-sum-square) Chebyshev
+tails with summed function sizes when lowering :math:`K`. At satellite altitude the
+maximum stayed below :math:`\varepsilon`, but for EGM2008 on Earth's topographic surface
+the horizontal gravity reached :math:`5\varepsilon` and the horizontal gradients
+:math:`50\varepsilon`, the maximum over mountains exceeding the root mean square over the
+sphere by more than 10. The bound above costs one or two radial functions more on
+satellite shells (for LCS-1 at :math:`10^{-6}`, 7 in place of 6; for EGM2008 at
+:math:`10^{-10}`, 10 in place of 8), and keeps EGM2008 on the surface within
+:math:`0.15\varepsilon`.
 
 **Curl and divergence.** The approximation replaces :math:`u^{l+2}` in the radial
 and horizontal parts by the same function :math:`a_l(u) \approx u^{l+2}`. The result is
@@ -752,8 +776,8 @@ Accuracy and parameter choice
 The fast method has three error sources:
 
 - the window, controlled by :math:`w`;
-- truncation of the radial SVD, controlled by :math:`\rho` (tolerance
-  :math:`0.1\varepsilon` for every quantity, see :ref:`radial-weights`);
+- truncation of the radial SVD, controlled by :math:`\rho` (a bound on the maximum
+  error of every quantity within :math:`\varepsilon/2`, see :ref:`radial-weights`);
 - floating-point rounding.
 
 The requested accuracy :math:`\varepsilon` is relative to the largest magnitude of each
@@ -780,7 +804,24 @@ of the shell by :math:`(\sum_l w_l^2 u^{2(l+p)} \bar E_l^2)^{1/2}`, with
 relative to the quantity's largest rms in the shell, is below :math:`\varepsilon`. This
 covers quantities with their power near the band edge (the horizontal gravity
 gradients) and shells that reach inside :math:`r = a`, where the highest degrees grow as
-:math:`u^l`. The measurements below are against 19-digit reference values,
+:math:`u^l`.
+
+This rule bounds a root mean square, not the maximum: a pointwise bound, with
+:math:`(2l+1)` or :math:`\sqrt{2l+1}` factors as for the radial step, widens the window by
+1 to 4 nodes more than any measured case needs, because it assumes that the aliasing
+errors of all Fourier modes add up at one point. After the set-up the chosen width is
+therefore checked against the direct sum, at the points where its error is likely to be
+largest: for each channel, the 16 grid nodes with the largest five-point Laplacian at the
+bottom of the shell, and around each the four cell midpoints (where the error of a
+band-edge mode peaks), at the bottom, middle and top of the shell, plus 256 points
+uniform in the shell for the sizes of the quantities. If any quantity's error there
+exceeds :math:`\varepsilon`, :math:`w` is raised by one and the grid rebuilt. In every
+case tested (LCS-1 and EGM2008, satellite shells and the topographic surface,
+:math:`10^{-3}` to :math:`10^{-13}`), the check found errors of :math:`0.09` to
+:math:`0.89\varepsilon` and never widened the window. It is made only when the width is
+chosen automatically (``w = 0``).
+
+The measurements below are against 19-digit reference values,
 taking the worst case over :math:`L = 13` and :math:`L = 185` and over a satellite shell
 and a thick shell:
 
@@ -816,6 +857,9 @@ Cost and memory
   :math:`L^2 N_\theta/8 \times (8 + 4 n_{ch})` operations, distributed over the orders
   :math:`m`.
 - The FFTs take :math:`O(n_{ch} L^2 \log L)`.
+
+- The window check (see :ref:`accuracy`) scans the grid once and evaluates the direct
+  sum at a few thousand points: :math:`O(L^2 (n_{ch}\rho + n_{\rm pts}))`.
 
 In practice set-up takes about 0.07 s at :math:`L = 185` and about 1 s at :math:`L = 720`
 on 16 threads.
