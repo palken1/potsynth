@@ -297,6 +297,9 @@ potsynth_gfc_read(const char * filename, const size_t lmax)
 void
 potsynth_gfc_free(potsynth_gfc * gfc)
 {
+  if (gfc == NULL)
+    return; /* as free(NULL) */
+
   if (gfc->coef)
     free(gfc->coef);
 

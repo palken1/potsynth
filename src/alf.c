@@ -132,6 +132,9 @@ potsynth_alf_alloc(const size_t lmax)
 void
 potsynth_alf_free(potsynth_alf_workspace * w)
 {
+  if (w == NULL)
+    return; /* as free(NULL) */
+
   if (w->ab)
     potsynth_aligned_free(w->ab);
 

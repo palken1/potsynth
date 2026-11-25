@@ -82,9 +82,9 @@ test_api(void)
   for (i = 0; i < 3 * n; ++i)
     B2[i] = -12345.0;
 
-  theta[100] = -1.0e-9;
+  theta[100] = -1.0e-5;
   ps_test_int(potsynth_eval(n, r, theta, phi, B2, ew), POTSYNTH_EDOM, "api: theta < 0");
-  theta[100] = M_PI + 1.0e-12;
+  theta[100] = M_PI + 1.0e-5;
   ps_test_int(potsynth_eval(n, r, theta, phi, B2, ew), POTSYNTH_EDOM, "api: theta > pi");
   theta[100] = 1.0;
   r[100] = rmax * (1.0 + 1.0e-6);
@@ -94,6 +94,24 @@ test_api(void)
   r[100] = rmin;
   ps_test(B2[0] != -12345.0 || B2[3 * n - 1] != -12345.0, "api: output untouched on error");
   ps_test_int(test_last_error(), POTSYNTH_EDOM, "api: domain error reported to handler");
+
+  /* colatitudes within 1e-6 of [0, pi] are accepted (pi in single precision), both
+   * methods continuing smoothly across the pole: values close to those at the pole */
+  {
+    double tp[3], pp[3], rp[3], o[9];
+    const double tpole[3] = { (double) (float) M_PI, -5.0e-7, M_PI + 9.0e-7 };
+    size_t jj;
+
+    for (jj = 0; jj < 3; ++jj)
+      {
+        tp[jj] = tpole[jj];
+        pp[jj] = 0.3 + jj;
+        rp[jj] = rmin;
+      }
+    ps_test_int(potsynth_eval(3, rp, tp, pp, o, ew), POTSYNTH_SUCCESS, "api: theta within 1e-6 of the poles");
+    for (jj = 0; jj < 9; ++jj)
+      ps_test(!isfinite(o[jj]), "api: finite value near the pole (%zu)", jj);
+  }
 
   /* empty input, NULL arrays */
   ps_test_int(potsynth_eval(0, NULL, NULL, NULL, NULL, ew), POTSYNTH_SUCCESS, "api: n = 0");

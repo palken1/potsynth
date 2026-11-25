@@ -331,7 +331,7 @@ core field models are of low degree, where a direct sum is already fast.
 
 .. c:function:: void potsynth_shc_free(potsynth_shc * shc)
 
-   Frees a model read by :c:func:`potsynth_shc_read`.
+   Frees a model read by :c:func:`potsynth_shc_read`. A NULL pointer is ignored.
 
 .. c:function:: potsynth_workspace * potsynth_mag_alloc_shc(const char * filename, const double a, const double rmin, const double rmax, const int quantities, const potsynth_parameters * params)
 
@@ -476,7 +476,7 @@ time-variable terms (``gfct``, ``trnd``, ``dot``, ``acos``, ``asin``) give
 
 .. c:function:: void potsynth_gfc_free(potsynth_gfc * gfc)
 
-   Frees a model read by :c:func:`potsynth_gfc_read`.
+   Frees a model read by :c:func:`potsynth_gfc_read`. A NULL pointer is ignored.
 
 .. c:function:: potsynth_workspace * potsynth_grav_alloc_gfc(const char * filename, const size_t lmax, const double rmin, const double rmax, const int quantities, const potsynth_parameters * params)
 
@@ -871,7 +871,7 @@ and Hermite functions as further examples.
 
 .. c:function:: void potsynth_free(potsynth_workspace * w)
 
-   Frees a workspace.
+   Frees a workspace. A NULL pointer is ignored.
 
 .. _vsh-frontend:
 
@@ -1010,7 +1010,7 @@ Evaluation
 
 .. c:function:: void potsynth_eval_free(potsynth_eval_workspace * ew)
 
-   Frees an evaluation workspace.
+   Frees an evaluation workspace. A NULL pointer is ignored.
 
 .. c:function:: int potsynth_eval(const size_t n, const double * r, const double * theta, const double * phi, double * out, potsynth_eval_workspace * ew)
 
@@ -1035,7 +1035,12 @@ Evaluation
      untouched, if any point has :math:`\theta \notin [0,\pi]` or :math:`r \le 0`;
      for the fast method, if :math:`r` lies outside :math:`[r_{min}, r_{max}]` or
      :math:`\theta` outside the colatitude range of the model; or, with radial functions
-     of the caller, if the functions refuse :math:`r`.
+     of the caller, if the functions refuse :math:`r`. Colatitudes up to
+     :math:`10^{-6}` rad outside :math:`[0,\pi]` are accepted (the ends of a colatitude
+     range stay strict, except at a pole),
+     so that :math:`\pi` rounded to single precision is; both methods then give the
+     smooth continuation of the field across the pole. A radial function of the caller
+     that fails after validation gives NaN for its points and :c:macro:`POTSYNTH_EDOM`.
    - **Non-finite inputs.** A NaN or infinite coordinate is not an error; that
      point's outputs are set to NaN.
 

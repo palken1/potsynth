@@ -52,6 +52,13 @@ test_robust(void)
 
   params.method = POTSYNTH_METHOD_FAST;
 
+  /* the free functions accept NULL, as free() does */
+  potsynth_free(NULL);
+  potsynth_eval_free(NULL);
+  potsynth_shc_free(NULL);
+  potsynth_gfc_free(NULL);
+  ps_test(0, "robust: free functions accept NULL");
+
   /* sigma below 1 is rejected (it overflowed the grid); 1 is accepted */
   test_last_error();
   params.sigma = 0.6;
@@ -65,6 +72,52 @@ test_robust(void)
   ps_test(w == NULL, "robust: sigma 1 accepted");
   potsynth_free(w);
   params.sigma = 0.0;
+
+  /* just past the poles (within the colatitude tolerance): fast and direct agree, and
+   * the values continue smoothly from those at the pole */
+  {
+    potsynth_workspace * wf, * wdir;
+    const double tq[6] = { 0.0, -5.0e-7, -9.9e-7, M_PI, M_PI + 5.0e-7, (double) (float) M_PI };
+    double rq[6], pq[6], of[18], od[18], big = 0.0, dfd = 0.0, dpole = 0.0;
+    size_t jj;
+
+    for (jj = 0; jj < 6; ++jj)
+      {
+        rq[jj] = rmin + 100.0;
+        pq[jj] = 1.1;
+      }
+    params.eps = 1e-10;
+    wf = potsynth_mag_alloc(1, L, L, gh, a, rmin, rmax, POTSYNTH_MAG_B, &params);
+    params.method = POTSYNTH_METHOD_DIRECT;
+    wdir = potsynth_mag_alloc(1, L, L, gh, a, rmin, rmax, POTSYNTH_MAG_B, &params);
+    params.method = POTSYNTH_METHOD_FAST;
+    if (wf && wdir)
+      {
+        potsynth_eval_workspace * ef = potsynth_eval_alloc(0, wf), * ed = potsynth_eval_alloc(0, wdir);
+
+        ps_test_int(potsynth_eval(6, rq, tq, pq, of, ef), POTSYNTH_SUCCESS, "robust: fast just past the poles");
+        ps_test_int(potsynth_eval(6, rq, tq, pq, od, ed), POTSYNTH_SUCCESS, "robust: direct just past the poles");
+        for (jj = 0; jj < 18; ++jj)
+          big = fmax(big, fabs(od[jj]));
+        for (jj = 0; jj < 18; ++jj)
+          dfd = fmax(dfd, fabs(of[jj] - od[jj]));
+        for (jj = 0; jj < 3; ++jj)
+          {
+            /* component c of point k is out[c*6 + k]: compare k = 1, 2 with 0 and 4, 5 with 3 */
+            size_t k;
+            for (k = 1; k < 6; ++k)
+              if (k != 3)
+                dpole = fmax(dpole, fabs(od[jj * 6 + k] - od[jj * 6 + ((k < 3) ? 0 : 3)]));
+          }
+        ps_test(!(dfd <= 3.0 * params.eps * big), "robust: fast and direct agree past the poles (%.1e)", dfd / big);
+        ps_test(!(dpole <= 1.0e-4 * big), "robust: values past the poles close to those at the poles (%.1e)",
+                dpole / big);
+        potsynth_eval_free(ef);
+        potsynth_eval_free(ed);
+      }
+    potsynth_free(wf);
+    potsynth_free(wdir);
+  }
 
   /* achieved errors: within the tolerances for the automatic choice, -1 without a check */
   params.eps = 1e-10;

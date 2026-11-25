@@ -68,7 +68,9 @@ First public release.
   operator are combined before their power is taken, so that sets that nearly cancel
   (e.g. the difference of two epochs) get the radial basis and window of their sum, not
   of each set.
-- Robustness: `sigma` below 1 is rejected (it overflowed the grid); `potsynth_read`
+- Robustness: the free functions accept NULL, as `free()` does; colatitudes up to 1e-6 rad
+  outside [0, pi] are accepted (pi in single precision), with the smooth continuation of
+  the field across the pole; CMake looks for Homebrew's libomp on macOS; `sigma` below 1 is rejected (it overflowed the grid); `potsynth_read`
   checks the sizes in the file header (window inside the stored rows and columns, no
   overflow); a radial function of the caller that fails after the points were validated
   gives NaN for those points and an error, in C and Python (the exception of a Python

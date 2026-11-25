@@ -608,6 +608,9 @@ potsynth_free()
 void
 potsynth_free(potsynth_workspace * w)
 {
+  if (w == NULL)
+    return; /* as free(NULL) */
+
   if (w->rpow)
     free(w->rpow);
 

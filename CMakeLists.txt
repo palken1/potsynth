@@ -38,7 +38,21 @@ set(POTSYNTH_SOURCES
 find_library(MATH_LIBRARY m)
 
 if(POTSYNTH_OPENMP)
+  # Apple clang has no OpenMP of its own; look for Homebrew's libomp unless the
+  # caller gave OpenMP_ROOT (Apple silicon, then Intel prefix)
+  if(APPLE AND NOT DEFINED OpenMP_ROOT AND NOT DEFINED ENV{OpenMP_ROOT})
+    foreach(prefix /opt/homebrew/opt/libomp /usr/local/opt/libomp)
+      if(EXISTS "${prefix}/include/omp.h")
+        set(OpenMP_ROOT "${prefix}")
+        break()
+      endif()
+    endforeach()
+  endif()
   find_package(OpenMP COMPONENTS C)
+  if(NOT OpenMP_C_FOUND)
+    message(WARNING "OpenMP not found: potsynth is built single-threaded. On macOS, install "
+                    "libomp (brew install libomp) or give -DOpenMP_ROOT=<its prefix>.")
+  endif()
 endif()
 
 # -march=native where supported; Apple clang on arm64 only accepts -mcpu=native

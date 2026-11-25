@@ -105,8 +105,8 @@ test_hess_ref(const char * file)
 {
   char filename[1024];
   FILE * fp;
-  int64_t hdr[2];
-  double a, * coef, * r, * theta, * phi, * Tref, * F, * T;
+  int64_t hdr[2] = { 0, 0 };
+  double a = 0.0, * coef, * r, * theta, * phi, * Tref, * F, * T;
   size_t L, n, nlm, i, k;
   potsynth_parameters params = potsynth_default_parameters();
   potsynth_workspace * w;

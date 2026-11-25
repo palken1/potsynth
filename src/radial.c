@@ -237,6 +237,9 @@ potsynth_radial_alloc_caller(const size_t nrad, const size_t lmax, const size_t 
 void
 potsynth_radial_free(potsynth_radial_workspace * w)
 {
+  if (w == NULL)
+    return; /* as free(NULL) */
+
   if (w->basis)
     potsynth_aligned_free(w->basis);
 

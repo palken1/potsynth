@@ -160,6 +160,9 @@ potsynth_direct_init(potsynth_workspace * w)
 void
 potsynth_direct_free(potsynth_workspace * w)
 {
+  if (w == NULL)
+    return; /* as free(NULL) */
+
   if (w->doff)
     free(w->doff);
 

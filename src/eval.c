@@ -133,6 +133,9 @@ potsynth_eval_alloc(const size_t chunk, const potsynth_workspace * w)
 void
 potsynth_eval_free(potsynth_eval_workspace * ew)
 {
+  if (ew == NULL)
+    return; /* as free(NULL) */
+
   if (ew->key)
     free(ew->key);
 
@@ -396,11 +399,13 @@ validate(const size_t n, const double * r, const double * theta, const double * 
       if (!point_finite(ri, theta[i], phi[i]))
         continue; /* NaN output, not an error */
 
-      if (theta[i] < 0.0 || theta[i] > M_PI || !(ri > 0.0))
+      if (theta[i] < -POTSYNTH_THETA_TOL || theta[i] > M_PI + POTSYNTH_THETA_TOL || !(ri > 0.0))
         return POTSYNTH_EDOM;
 
-      /* colatitude range of the stored grid rows */
-      if (w->method == POTSYNTH_METHOD_FAST && (theta[i] < w->th_lo || theta[i] > w->th_hi))
+      /* colatitude range of the stored grid rows: strict, except at an end that is a pole */
+      if (w->method == POTSYNTH_METHOD_FAST &&
+          (theta[i] < w->th_lo - ((w->th_lo == 0.0) ? POTSYNTH_THETA_TOL : 0.0) ||
+           theta[i] > w->th_hi + ((w->th_hi == M_PI) ? POTSYNTH_THETA_TOL : 0.0)))
         return POTSYNTH_EDOM;
 
       if (w->nrad > 0)

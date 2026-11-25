@@ -198,6 +198,9 @@ potsynth_shc_read(const char * filename)
 void
 potsynth_shc_free(potsynth_shc * shc)
 {
+  if (shc == NULL)
+    return; /* as free(NULL) */
+
   if (shc->gh)
     free(shc->gh);
 

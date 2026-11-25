@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 
 #include "potsynth_internal.h"
 #include "pocketfft.h"
@@ -53,6 +54,9 @@ typedef struct
   double * H;           /* doubled-sphere function, Nt complex */
   double * Z;           /* fine theta grid of each pair, npair*nf1 complex */
   double * R;           /* row transform buffer, nf2 */
+  double * pm;          /* s_j^(m-d) of the order being computed, d = 0, 1, 2: mantissa, 3*nqp */
+  double * p2;          /* and its power of two (with the column scaling), or 0 if not a double */
+  int * pe;             /* and its exponent (with the column scaling), 3*nqp */
 } fast_thread;
 
 /* data shared by all threads during set-up */
@@ -200,7 +204,10 @@ potsynth_fast_init(potsynth_workspace * w)
       POTSYNTH_ERROR ("grid too large", POTSYNTH_ENOMEM);
     }
 
-  w->grid = potsynth_aligned_calloc(w->nrows * w->ncols * w->nchp * sizeof(double));
+  /* not zeroed here (a serial pass over the whole grid): the orders write the Fourier
+   * slots 0..2 mmax of every row and channel, and fast_row() supplies the zeros of the
+   * slots above them and of the padding channels */
+  w->grid = potsynth_aligned_alloc(w->nrows * w->ncols * w->nchp * sizeof(double));
   if (w->grid == NULL)
     {
       POTSYNTH_ERROR ("unable to allocate grid", POTSYNTH_ENOMEM);
@@ -404,9 +411,12 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
       thread->H = potsynth_aligned_alloc(2 * state->Nt * sizeof(double));
       thread->Z = potsynth_aligned_alloc(2 * w->nch * w->nf1 * sizeof(double));
       thread->R = potsynth_aligned_alloc(w->nf2 * sizeof(double));
+      thread->pm = malloc(3 * state->nqp * sizeof(double));
+      thread->p2 = malloc(3 * state->nqp * sizeof(double));
+      thread->pe = malloc(3 * state->nqp * sizeof(int));
       if (!thread->W || !thread->n0 || !thread->src || !thread->Q || !thread->E ||
           (state->needG && !thread->G) || !thread->acc || !thread->S || !thread->H ||
-          !thread->Z || !thread->R)
+          !thread->Z || !thread->R || !thread->pm || !thread->p2 || !thread->pe)
         {
           POTSYNTH_ERROR ("unable to allocate thread buffers", POTSYNTH_ENOMEM);
         }
@@ -470,6 +480,10 @@ fast_state_free(fast_state_t * state)
 
           if (thread->W)
             potsynth_aligned_free(thread->W);
+
+          free(thread->pm);
+          free(thread->p2);
+          free(thread->pe);
 
           if (thread->n0)
             free(thread->n0);
@@ -608,6 +622,29 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
         }
     }
 
+  /* s_j^(m-d), d = 0, 1, 2, at each node, as mantissa and exponent (with the column
+   * scaling of order m); they depend only on the node and the order, not on the term.
+   * The power of two is applied by multiplying with 2^e, which gives the value of
+   * ldexp() bit for bit (one rounding of the exact product) when 2^e is a double;
+   * otherwise ldexp() is used */
+  if (m > 0)
+    {
+      for (j = 0; j < state->nq; ++j)
+        {
+          size_t d;
+
+          for (d = 0; d <= 2 && d <= m; ++d)
+            {
+              int expo;
+
+              potsynth_pow_scaled(state->sq[j], m - d, &thread->pm[3 * j + d], &expo);
+              expo += scale;
+              thread->pe[3 * j + d] = expo;
+              thread->p2[3 * j + d] = (expo >= -1074 && expo <= 1023) ? ldexp(1.0, expo) : 0.0;
+            }
+        }
+    }
+
   /* each pair: combine terms, build the doubled-sphere function, FFT, pre-sharpen, IFFT */
   for (k = 0; k < npair; ++k)
     {
@@ -650,17 +687,27 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
 
               if (m > 0)
                 {
-                  const size_t ps = (post == POTSYNTH_POST_SM1) ? m - 1 :
-                                    (post == POTSYNTH_POST_SM2 || post == POTSYNTH_POST_XSM2) ? m - 2 : m;
-                  double mant;
-                  int expo;
+                  const size_t d = (post == POTSYNTH_POST_SM1) ? 1 :
+                                   (post == POTSYNTH_POST_SM2 || post == POTSYNTH_POST_XSM2) ? 2 : 0;
+                  const double p2 = thread->p2[3 * j + d];
 
-                  potsynth_pow_scaled(state->sq[j], ps, &mant, &expo);
-                  f *= mant;
-                  ae += ldexp(f * S[j], expo + scale);
-                  ao += ldexp(f * S[nqp + j], expo + scale);
-                  be += ldexp(f * S[2 * nqp + j], expo + scale);
-                  bo += ldexp(f * S[3 * nqp + j], expo + scale);
+                  f *= thread->pm[3 * j + d];
+                  if (p2 != 0.0)
+                    {
+                      ae += (f * S[j]) * p2;
+                      ao += (f * S[nqp + j]) * p2;
+                      be += (f * S[2 * nqp + j]) * p2;
+                      bo += (f * S[3 * nqp + j]) * p2;
+                    }
+                  else
+                    {
+                      const int expo = thread->pe[3 * j + d];
+
+                      ae += ldexp(f * S[j], expo);
+                      ao += ldexp(f * S[nqp + j], expo);
+                      be += ldexp(f * S[2 * nqp + j], expo);
+                      bo += ldexp(f * S[3 * nqp + j], expo);
+                    }
                 }
               else
                 {
@@ -759,6 +806,11 @@ fast_row()
   Inverse real FFT along phi of each channel of one stored row, and
 periodic padding columns
 
+Notes:
+1) The grid is not zeroed at allocation: the Fourier slots above 2 mmax, which no
+order writes, are taken as zero here, and the padding channels nch..nchp-1 are
+set to zero
+
 Inputs: row   - stored row index
         R     - buffer, length nf2
         state - shared set-up data
@@ -770,6 +822,7 @@ fast_row(const size_t row, double * R, const fast_state_t * state, potsynth_work
 {
   const size_t nf2 = w->nf2;
   const size_t nchp = w->nchp;
+  const size_t kmax = 2 * w->mmax; /* last Fourier slot written by the orders */
   double * g = w->grid + row * w->ncols * nchp;
   size_t q, k;
 
@@ -778,13 +831,20 @@ fast_row(const size_t row, double * R, const fast_state_t * state, potsynth_work
       long col;
 
       for (k = 0; k < nf2; ++k)
-        R[k] = g[(size_t) ((long) k - w->col_lo) * nchp + q];
+        R[k] = (k <= kmax) ? g[(size_t) ((long) k - w->col_lo) * nchp + q] : 0.0;
 
       if (rfft_backward(state->p2, R, 1.0) != 0)
         return POTSYNTH_ENOMEM;
 
       for (col = w->col_lo; col <= w->col_hi; ++col)
         g[(size_t) (col - w->col_lo) * nchp + q] = R[floor_mod(col, (long) nf2)];
+    }
+
+  /* padding channels */
+  if (nchp > w->nch)
+    {
+      for (k = 0; k < w->ncols; ++k)
+        memset(g + k * nchp + w->nch, 0, (nchp - w->nch) * sizeof(double));
     }
 
   return POTSYNTH_SUCCESS;
@@ -1293,6 +1353,7 @@ potsynth_fast_check(potsynth_workspace * w)
   size_t * grp = malloc(nchan * sizeof(size_t));
   size_t * sel = malloc(nchan * sizeof(size_t));
   double * b1 = malloc(rho * sizeof(double));
+  size_t * tmin = NULL;
   double * tops = NULL, * r = NULL, * th = NULL, * ph = NULL, * of = NULL, * od = NULL;
   double * buf = NULL, * acc = NULL;
   long * topr = NULL, * topc = NULL;
@@ -1321,6 +1382,7 @@ potsynth_fast_check(potsynth_workspace * w)
     {
       npt = ntop * 12 + CHECK_NRAND;
       tops = calloc(ntop * (size_t) nth, sizeof(double));
+      tmin = calloc(nsel * (size_t) nth, sizeof(size_t));
       topr = calloc(ntop * (size_t) nth, sizeof(long));
       topc = calloc(ntop * (size_t) nth, sizeof(long));
       r = malloc(npt * sizeof(double));
@@ -1330,7 +1392,7 @@ potsynth_fast_check(potsynth_workspace * w)
       od = malloc(nsel * npt * sizeof(double));
       buf = malloc(nchan * CHECK_CHUNK * sizeof(double));
       acc = calloc(4 * ngrp, sizeof(double));
-      ok = (tops && topr && topc && r && th && ph && of && od && buf && acc);
+      ok = (tops && tmin && topr && topc && r && th && ph && of && od && buf && acc);
       if (!ok)
         failed = POTSYNTH_ENOMEM;
     }
@@ -1346,50 +1408,105 @@ potsynth_fast_check(potsynth_workspace * w)
           b1[i] = (w->radial_workspace_p->ud > 0.0) ? s : w->radial_workspace_p->basis[i * nc];
         }
 
-      /* candidates: largest |Laplacian| of each checked channel at r = rmin, one list per thread */
-#pragma omp parallel for private(row) schedule(static) num_threads(nth)
-      for (row = rfirst; row < rlast; ++row)
-        {
+      /* candidates: largest |Laplacian| of each checked channel at r = rmin, one list per thread.
+       * Each node's radial sum is computed once: a thread keeps the sums of three
+       * consecutive rows (columns -1..nf2) and adds one row per step; its rows are
+       * consecutive under the static schedule (otherwise the three rows are recomputed) */
+#pragma omp parallel num_threads(nth)
+      {
 #ifdef _OPENMP
-          const size_t base = (size_t) omp_get_thread_num() * ntop;
+        const size_t base = (size_t) omp_get_thread_num() * ntop;
 #else
-          const size_t base = 0;
+        const size_t base = 0;
 #endif
-          long col;
-          size_t ck;
-          for (col = 0; col < (long) w->nf2; ++col)
-            {
-              for (ck = 0; ck < nsel; ++ck)
-                {
-                  const size_t cc = sel[ck];
-                  const long dr[5] = { 0, -1, 1, 0, 0 }, dc[5] = { 0, 0, 0, -1, 1 };
-                  double v[5];
-                  size_t q, ii, slot = base + ck * ctop, jmin = 0;
-                  double lap;
+        const size_t nrc = w->nf2 + 2;              /* columns -1 .. nf2 */
+        double * ring = malloc(3 * nrc * nsel * sizeof(double));
+        long have = LONG_MIN;                       /* centre row of the sums in the ring */
 
-                  for (q = 0; q < 5; ++q)
-                    {
-                      const double * g = w->grid + ((size_t) (row + dr[q] - w->row_lo) * w->ncols +
-                                                    (size_t) (col + dc[q] - w->col_lo)) * nchp;
-                      double s = 0.0;
-                      for (ii = 0; ii < rho; ++ii)
-                        s += b1[ii] * g[potsynth_layer(w, cc, ii, rho)];
-                      v[q] = s;
-                    }
+#pragma omp for private(row) schedule(static)
+        for (row = rfirst; row < rlast; ++row)
+          {
+            long col, rr;
+            size_t ck;
 
-                  lap = fabs(v[1] + v[2] + v[3] + v[4] - 4.0 * v[0]);
-                  for (q = 1; q < ctop; ++q)
-                    if (tops[slot + q] < tops[slot + jmin])
-                      jmin = q;
-                  if (lap > tops[slot + jmin])
-                    {
-                      tops[slot + jmin] = lap;
-                      topr[slot + jmin] = row;
-                      topc[slot + jmin] = col;
-                    }
-                }
-            }
-        }
+            if (ring != NULL)
+              {
+                /* rows row-1, row, row+1 in slots r mod 3 */
+                for (rr = (have == row - 1) ? row + 1 : row - 1; rr <= row + 1; ++rr)
+                  {
+                    double * slotp = ring + (size_t) (((rr % 3) + 3) % 3) * nrc * nsel;
+
+                    for (col = -1; col <= (long) w->nf2; ++col)
+                      {
+                        const double * g = w->grid + ((size_t) (rr - w->row_lo) * w->ncols +
+                                                      (size_t) (col - w->col_lo)) * nchp;
+
+                        for (ck = 0; ck < nsel; ++ck)
+                          {
+                            const size_t cc = sel[ck];
+                            double sum = 0.0;
+                            size_t ii;
+
+                            for (ii = 0; ii < rho; ++ii)
+                              sum += b1[ii] * g[potsynth_layer(w, cc, ii, rho)];
+                            slotp[(size_t) (col + 1) * nsel + ck] = sum;
+                          }
+                      }
+                  }
+                have = row;
+              }
+
+            for (col = 0; col < (long) w->nf2; ++col)
+              {
+                for (ck = 0; ck < nsel; ++ck)
+                  {
+                    const size_t cc = sel[ck];
+                    const long dr[5] = { 0, -1, 1, 0, 0 }, dc[5] = { 0, 0, 0, -1, 1 };
+                    double v[5];
+                    size_t q, ii, slot = base + ck * ctop;
+                    size_t * jmin = tmin + base / ctop + ck; /* position of the list's smallest entry */
+                    double lap;
+
+                    for (q = 0; q < 5; ++q)
+                      {
+                        const long rq = row + dr[q], cq = col + dc[q];
+
+                        if (ring != NULL)
+                          {
+                            v[q] = ring[((size_t) (((rq % 3) + 3) % 3) * nrc + (size_t) (cq + 1)) * nsel + ck];
+                          }
+                        else
+                          {
+                            const double * g = w->grid + ((size_t) (rq - w->row_lo) * w->ncols +
+                                                          (size_t) (cq - w->col_lo)) * nchp;
+                            double sum = 0.0;
+                            for (ii = 0; ii < rho; ++ii)
+                              sum += b1[ii] * g[potsynth_layer(w, cc, ii, rho)];
+                            v[q] = sum;
+                          }
+                      }
+
+                    lap = fabs(v[1] + v[2] + v[3] + v[4] - 4.0 * v[0]);
+
+                    /* the smallest entry is kept, so the list is searched only when it changes
+                     * (the first smallest, as a search before each candidate would find) */
+                    if (lap > tops[slot + *jmin])
+                      {
+                        tops[slot + *jmin] = lap;
+                        topr[slot + *jmin] = row;
+                        topc[slot + *jmin] = col;
+
+                        *jmin = 0;
+                        for (q = 1; q < ctop; ++q)
+                          if (tops[slot + q] < tops[slot + *jmin])
+                            *jmin = q;
+                      }
+                  }
+              }
+          }
+
+        free(ring);
+      }
 
       /* merge the threads' lists into the first */
       for (th0 = 1; th0 < nth; ++th0)
@@ -1535,7 +1652,7 @@ potsynth_fast_check(potsynth_workspace * w)
         }
     }
 
-  free(grp); free(sel); free(b1); free(tops); free(topr); free(topc);
+  free(grp); free(sel); free(b1); free(tops); free(tmin); free(topr); free(topc);
   free(r); free(th); free(ph); free(of); free(od); free(buf); free(acc);
 
   return failed ? -(double) failed : worst;

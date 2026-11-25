@@ -40,6 +40,11 @@
 #define POTSYNTH_ALIGN               64     /* memory alignment in bytes */
 #define POTSYNTH_ALF_EXPMAX          960    /* scaled ALF columns stay below 2^EXPMAX */
 #define POTSYNTH_ALF_SCALEMAX        1000   /* largest power-of-2 column scaling (bounds the degree) */
+/* colatitudes up to this far outside [0, pi] (or the colatitude range of a model) are
+ * accepted, e.g. pi rounded to single precision (8.7e-8 above pi); both methods give
+ * the smooth continuation of the field across the pole there */
+#define POTSYNTH_THETA_TOL           1.0e-6
+
 #define POTSYNTH_WMAX                16     /* largest window width in the calibration tables */
 #define POTSYNTH_AUTO_LMIN           24     /* METHOD_AUTO uses the fast method for lmax >= this */
 
