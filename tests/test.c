@@ -7,7 +7,7 @@
  *
  * test_util.c    - scaled powers, cos/sin(m phi), FFT lengths
  * test_quad.c    - Gauss-Legendre quadrature, window transform, window width
- * test_fft.c     - pocketfft conventions relied on by the set-up
+ * test_fft.c     - FFT conventions relied on by the set-up (potsynth_fft.h)
  * test_svd.c     - one-sided Jacobi SVD
  * test_radial.c  - radial basis
  * test_alf.c     - Legendre columns, accumulation kernel, column scaling
@@ -50,7 +50,7 @@
 #include "potsynth_mag.h"
 #include "potsynth_grav.h"
 #include "potsynth_vsh.h"
-#include "pocketfft.h"
+#include "potsynth_fft.h"
 
 #include "test_common.h"
 

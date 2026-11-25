@@ -1054,7 +1054,7 @@ References
   75--98, 2003.
 - N. Schaeffer, Efficient spherical harmonic transforms aimed at pseudospectral
   numerical simulations, *Geochem. Geophys. Geosyst.* 14(3), 751--758, 2013.
-- M. Reinecke, pocketfft, https://gitlab.mpcdf.mpg.de/mtr/pocketfft.
+- M. Reinecke and P. Bell, pocketfft (C++), https://github.com/mreineck/pocketfft.
 - G. Barrera, G. F. Estévez, J. Giraldo, Vector spherical harmonics and their
   application to magnetostatics, *Eur. J. Phys.* 6, 287--294, 1985.
 - F. J. Lowes, Mean-square values on sphere of spherical harmonic vector fields,

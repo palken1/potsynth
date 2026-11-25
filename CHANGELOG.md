@@ -82,6 +82,10 @@ First public release.
 - Radial functions of the caller are called once per point: validation checks the radius
   against [rmin, rmax] of the model, where the functions must be valid (they were called
   in validation and again in the evaluation).
+- The FFTs of the set-up use the header-only C++ pocketfft (BSD, vendored in
+  `extern/pocketfft_cpp`, called from one C++ file) instead of the C pocketfft: the many
+  transforms of an order or a grid row are done in one call, vectorized across them, and
+  the phi pass transforms each row in place. Building needs a C++11 compiler too.
 - Set-up skips the theta-derivative column of the Legendre recursion when no functional
   uses it (potentials and radial components alone).
 - Robustness: functions that need the coefficients of a model refuse a fast workspace,

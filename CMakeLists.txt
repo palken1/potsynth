@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(potsynth VERSION 0.1.0 LANGUAGES C)
+project(potsynth VERSION 0.1.0 LANGUAGES C CXX)
 
 option(POTSYNTH_OPENMP "Use OpenMP threads" ON)
 option(POTSYNTH_NATIVE "Optimize for the build machine (-march=native)" ON)
@@ -14,6 +14,9 @@ endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+# one C++ file, src/fft.cc: the FFTs of the set-up from the header-only C++ pocketfft
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(POTSYNTH_SOURCES
   ${PROJECT_SOURCE_DIR}/src/alf.c
@@ -33,7 +36,7 @@ set(POTSYNTH_SOURCES
   ${PROJECT_SOURCE_DIR}/src/util.c
   ${PROJECT_SOURCE_DIR}/src/vsh.c
   ${PROJECT_SOURCE_DIR}/src/window.c
-  ${PROJECT_SOURCE_DIR}/extern/pocketfft/pocketfft.c)
+  ${PROJECT_SOURCE_DIR}/src/fft.cc)
 
 find_library(MATH_LIBRARY m)
 
@@ -73,8 +76,11 @@ endif()
 # compile options shared by the library and by targets built from its sources (tests)
 function(potsynth_target_options target)
   target_include_directories(${target} PRIVATE
-    ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/extern/pocketfft)
+    ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/extern/pocketfft_cpp)
   target_compile_definitions(${target} PRIVATE POTSYNTH_BUILDING)
+  # pocketfft: no threads of its own (potsynth threads with OpenMP), a cache of plans
+  target_compile_definitions(${target} PRIVATE
+    "$<$<COMPILE_LANGUAGE:CXX>:POCKETFFT_NO_MULTITHREADING;POCKETFFT_CACHE_SIZE=16>")
 
   if(POTSYNTH_NO_VECEXT)
     target_compile_definitions(${target} PRIVATE POTSYNTH_NO_VECEXT)
@@ -177,6 +183,12 @@ else()
   set(POTSYNTH_PC_LIBS_PRIVATE "")
   if(MATH_LIBRARY)
     string(APPEND POTSYNTH_PC_LIBS_PRIVATE " -lm")
+  endif()
+  # the C++ runtime of src/fft.cc, for a static link with a C compiler
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    string(APPEND POTSYNTH_PC_LIBS_PRIVATE " -lstdc++")
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    string(APPEND POTSYNTH_PC_LIBS_PRIVATE " -lc++")
   endif()
   if(OpenMP_C_FOUND)
     string(APPEND POTSYNTH_PC_LIBS_PRIVATE " ${OpenMP_C_FLAGS}")

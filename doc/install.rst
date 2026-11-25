@@ -26,13 +26,15 @@ direct method; setting the environment variable ``POTSYNTH_GENERIC=1`` forces it
 Requirements
 ============
 
-- A C11 compiler (GCC, Clang, MSVC).
+- A C11 compiler and a C++11 compiler (GCC, Clang, MSVC); C++ is needed for one file,
+  the interface to the FFT.
 - CMake 3.15 or later.
 - Optional: OpenMP, for multi-threading.
 - Optional: GSL, used only by one extra test.
 - For the Python interface: Python 3 and NumPy.
 
-The FFT used during set-up (pocketfft, BSD license) is included in ``extern/``.
+The FFT used during set-up (the header-only C++ pocketfft, BSD license) is included in
+``extern/``. It vectorizes across the many transforms of the set-up.
 
 Building the C library
 ======================

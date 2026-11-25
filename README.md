@@ -42,8 +42,8 @@ Documentation: `doc/` (Sphinx). Build it with `make -C doc html`, then open
 
 - C library with a Python interface (`python/potsynth`, via ctypes and NumPy). There is a single
   implementation.
-- No required dependencies. OpenMP is optional, and an FFT (pocketfft, BSD) is vendored in
-  `extern/`.
+- No required dependencies. OpenMP is optional, and an FFT (the header-only C++ pocketfft,
+  BSD) is vendored in `extern/`; building needs a C11 and a C++11 compiler.
 - Double precision throughout. Legendre functions use the Holmes & Featherstone
   recursions (derived from GSL's `gsl_sf_alf_vsh_array`), with exact power-of-two column
   scaling. This supports degrees up to `POTSYNTH_LMAX` = 2800.
@@ -168,7 +168,7 @@ kernels, ASan+UBSan, and TSan.
 
     include/     public headers (potsynth.h core, potsynth_mag.h, potsynth_grav.h, potsynth_vsh.h)
     src/         implementation
-    extern/      vendored third-party code (pocketfft)
+    extern/      vendored third-party code (C++ pocketfft)
     tests/       tests, long-double reference data (tests/data), benchmark
     python/      Python package (ctypes interface to the shared library)
     examples/    C and Python examples
@@ -192,4 +192,4 @@ under "Cite this repository"). Changes between versions are listed in `CHANGELOG
 
 ## License
 
-BSD 3-Clause, see `LICENSE`. pocketfft: BSD 3-Clause, see `extern/pocketfft/LICENSE.md`.
+BSD 3-Clause, see `LICENSE`. pocketfft: BSD 3-Clause, see `extern/pocketfft_cpp/LICENSE.md`.
