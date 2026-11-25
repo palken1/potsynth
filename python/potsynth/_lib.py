@@ -29,6 +29,9 @@ POTSYNTH_EUNSUP = 4
 METHOD_AUTO, METHOD_FAST, METHOD_DIRECT = 0, 1, 2
 THETA_P, THETA_DP, THETA_PSIN, THETA_S2A, THETA_S2B = 0, 1, 2, 3, 4
 
+VSH_VR, VSH_VH, VSH_V, VSH_DIV, VSH_CURL = 0x1, 0x2, 0x3, 0x4, 0x8
+VSH_NORM_FULL, VSH_NORM_SCHMIDT = 0, 1
+
 LMAX = 2800
 
 
@@ -39,6 +42,17 @@ class Channel_t(ctypes.Structure):
                 ("dphi", ctypes.c_int)]
 
 
+# radial functions of the caller: int f(double r, size_t * first, size_t * n, double * f, double * df, void * params)
+RADIAL_FN_T = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_double, ctypes.POINTER(ctypes.c_size_t),
+                               ctypes.POINTER(ctypes.c_size_t), c_double_p, c_double_p, ctypes.c_void_p)
+
+
+class Radial_t(ctypes.Structure):
+    _fields_ = [("n", ctypes.c_size_t),
+                ("f", ctypes.c_void_p),        # potsynth_radial_fn *
+                ("params", ctypes.c_void_p)]
+
+
 class Params_t(ctypes.Structure):
     _fields_ = [("eps", ctypes.c_double),
                 ("method", ctypes.c_int),
@@ -46,7 +60,9 @@ class Params_t(ctypes.Structure):
                 ("w", ctypes.c_int),
                 ("rank_tol", ctypes.c_double),
                 ("nthreads", ctypes.c_int),
-                ("npts_hint", ctypes.c_size_t)]
+                ("npts_hint", ctypes.c_size_t),
+                ("theta_min", ctypes.c_double),
+                ("theta_max", ctypes.c_double)]
 
 
 class Shc_t(ctypes.Structure):
@@ -89,7 +105,8 @@ class Info_t(ctypes.Structure):
                 ("nf1", ctypes.c_size_t),
                 ("nf2", ctypes.c_size_t),
                 ("nrows", ctypes.c_size_t),
-                ("grid_bytes", ctypes.c_size_t)]
+                ("grid_bytes", ctypes.c_size_t),
+                ("ncomp", ctypes.c_size_t)]
 
 
 def _libname(base):
@@ -205,6 +222,25 @@ lib.potsynth_eval.argtypes = [ctypes.c_size_t, c_double_p, c_double_p, c_double_
 
 lib.potsynth_get_info.restype = ctypes.c_int
 lib.potsynth_get_info.argtypes = [ctypes.POINTER(Info_t), ctypes.c_void_p]
+
+lib.potsynth_eval_rows.restype = ctypes.c_int
+lib.potsynth_eval_rows.argtypes = [ctypes.c_size_t, c_double_p, c_double_p, c_double_p, c_double_p,
+                                   ctypes.c_void_p]
+
+lib.potsynth_vsh_nout.restype = ctypes.c_size_t
+lib.potsynth_vsh_nout.argtypes = [ctypes.c_int]
+
+lib.potsynth_vsh_alloc.restype = ctypes.c_void_p
+lib.potsynth_vsh_alloc.argtypes = [ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t,
+                                   c_double_p, c_double_p, c_double_p, ctypes.c_int, ctypes.c_int,
+                                   ctypes.c_double, ctypes.c_double, ctypes.POINTER(Radial_t),
+                                   ctypes.POINTER(Params_t)]
+
+lib.potsynth_write.restype = ctypes.c_int
+lib.potsynth_write.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
+
+lib.potsynth_read.restype = ctypes.c_void_p
+lib.potsynth_read.argtypes = [ctypes.c_char_p, ctypes.POINTER(Radial_t), ctypes.c_int]
 
 
 def strerror(status):

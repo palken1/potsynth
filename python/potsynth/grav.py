@@ -96,7 +96,8 @@ class GravModel(_Evaluator):
                  comma-separated string (default "V,g")
     rmin, rmax : radial range in m of the evaluation points (required by the fast
                  method; default: none, i.e. direct method only)
-    eps, method, npts_hint, nthreads, sigma, w, rank_tol, chunk : as for potsynth.Model
+    eps, method, npts_hint, nthreads, sigma, w, rank_tol, chunk, theta_min, theta_max : as for
+        potsynth.Model
 
     Calling the model with (r [m], theta [rad, colatitude], phi [rad]) returns a named
     tuple with the requested quantities in the order V, g_r, g_theta, g_phi, T_rr, ...,
@@ -106,7 +107,7 @@ class GravModel(_Evaluator):
 
     def __init__(self, coef, GM, a, lmax=None, lmin=0, mmax=None, quantities="V,g",
                  rmin=0.0, rmax=0.0, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0,
-                 rank_tol=0.0, chunk=0, npts_hint=0):
+                 rank_tol=0.0, chunk=0, npts_hint=0, theta_min=0.0, theta_max=0.0):
         flags, names = _flags(quantities)
         if isinstance(coef, tuple):
             C, S = coef
@@ -126,7 +127,7 @@ class GravModel(_Evaluator):
         if lmax > _lib.LMAX:
             raise ValueError(f"lmax > {_lib.LMAX} is not supported")
 
-        p = _params(eps, method, nthreads, sigma, w, rank_tol, npts_hint)
+        p = _params(eps, method, nthreads, sigma, w, rank_tol, npts_hint, theta_min, theta_max)
         _lib.clear_error()
         ptr = lib.potsynth_grav_alloc(lmin, lmax, mmax, coef.ctypes.data_as(_lib.c_double_p),
                                       GM, a, rmin, rmax, flags, ctypes.byref(p))

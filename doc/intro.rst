@@ -77,13 +77,30 @@ are not handled.
 
 The core of the library is generic. It evaluates any set of *channels*, meaning linear
 functionals of a potential such as :math:`V`, its radial derivative, or its horizontal
-gradient. Two front-ends supply the usual quantities:
+gradient. Three front-ends supply the usual quantities:
 
 - **Magnetic:** :math:`B_r, B_\theta, B_\phi` and the gradient tensor
   :math:`\nabla\mathbf{B}` from Gauss coefficients.
 - **Gravity:** the potential :math:`V`, the acceleration :math:`g_r, g_\theta, g_\phi`
   and the gravity gradient tensor :math:`\nabla\nabla V` from fully normalized
   coefficients.
+- **Vector fields:** any number of fields given by vector spherical harmonic
+  coefficients, which need not be gradients of a potential, with their surface
+  divergence and curl.
+
+The method does not need a potential. A model may hold several coefficient sets, with
+quantities that combine them, and all of them share one grid: many fields are then
+evaluated with one sum per point. The radial dependence may be the powers of
+:math:`a/r` of a potential, or radial functions supplied by the caller, for fields that
+are known at a number of radii or in any other radial basis (see
+:ref:`radial-functions`). Further features for large problems:
+
+- the outputs of a point next to each other, as the rows of a design matrix
+  (:c:func:`potsynth_eval_rows`);
+- a colatitude range of the points, which shrinks the grid for data on a polar cap or in
+  a region (:c:member:`potsynth_parameters.theta_max`);
+- model files, to read a model that has been set up instead of setting it up again
+  (:c:func:`potsynth_write`).
 
 Gradient tensors are exact at the poles too: the second derivatives are computed
 without dividing by :math:`\sin\theta` (see :ref:`gradient-tensor`).

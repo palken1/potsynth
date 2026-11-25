@@ -15,7 +15,12 @@
  * test_shc.c     - SHC file reader
  * test_ref.c     - magnetic field against extended precision reference values
  * test_eval.c    - fast method against direct method
- * test_grav.c    - gfc reader and gravity front-end
+ * test_radialfn.c - radial functions used by the tests below
+ * test_sets.c    - models with several coefficient sets
+ * test_region.c  - colatitude range of the evaluation points
+ * test_vsh.c     - vector spherical harmonic front-end
+ * test_io.c      - model files
+ * test_grav.c   - gfc reader and gravity front-end
  * test_hess.c    - gradient tensor (second-derivative operators)
  * test_tensor.c  - gradient tensors of the front-ends, frame conversions
  * test_geodesy.c - ellipsoids, normal field, geodetic coordinates
@@ -43,6 +48,7 @@
 #include "potsynth_internal.h"
 #include "potsynth_mag.h"
 #include "potsynth_grav.h"
+#include "potsynth_vsh.h"
 #include "pocketfft.h"
 
 #include "test_common.h"
@@ -64,6 +70,11 @@
 #include "test_shc.c"
 #include "test_ref.c"
 #include "test_eval.c"
+#include "test_radialfn.c"
+#include "test_sets.c"
+#include "test_region.c"
+#include "test_vsh.c"
+#include "test_io.c"
 #include "test_grav.c"
 #include "test_hess.c"
 #include "test_tensor.c"
@@ -89,6 +100,10 @@ main(void)
   test_shc();
   test_ref();
   test_eval();
+  test_sets();
+  test_region();
+  test_vsh();
+  test_io();
   test_grav();
   test_hess();
   test_tensor();

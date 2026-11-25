@@ -25,11 +25,13 @@ set(POTSYNTH_SOURCES
   ${PROJECT_SOURCE_DIR}/src/geodesy.c
   ${PROJECT_SOURCE_DIR}/src/gfc.c
   ${PROJECT_SOURCE_DIR}/src/grav.c
+  ${PROJECT_SOURCE_DIR}/src/io.c
   ${PROJECT_SOURCE_DIR}/src/mag.c
   ${PROJECT_SOURCE_DIR}/src/radial.c
   ${PROJECT_SOURCE_DIR}/src/setup.c
   ${PROJECT_SOURCE_DIR}/src/shc.c
   ${PROJECT_SOURCE_DIR}/src/util.c
+  ${PROJECT_SOURCE_DIR}/src/vsh.c
   ${PROJECT_SOURCE_DIR}/src/window.c
   ${PROJECT_SOURCE_DIR}/extern/pocketfft/pocketfft.c)
 
@@ -149,8 +151,24 @@ else()
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-  install(FILES include/potsynth.h include/potsynth_mag.h include/potsynth_grav.h
+  install(FILES include/potsynth.h include/potsynth_mag.h include/potsynth_grav.h include/potsynth_vsh.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+  # pkg-config file. Libs.private holds what a static link needs in addition
+  # (pkg-config --static): the math library and the OpenMP flags
+  set(POTSYNTH_PC_CFLAGS "")
+  if(BUILD_SHARED_LIBS)
+    set(POTSYNTH_PC_CFLAGS " -DPOTSYNTH_SHARED")
+  endif()
+  set(POTSYNTH_PC_LIBS_PRIVATE "")
+  if(MATH_LIBRARY)
+    string(APPEND POTSYNTH_PC_LIBS_PRIVATE " -lm")
+  endif()
+  if(OpenMP_C_FOUND)
+    string(APPEND POTSYNTH_PC_LIBS_PRIVATE " ${OpenMP_C_FLAGS}")
+  endif()
+  configure_file(potsynth.pc.in potsynth.pc @ONLY)
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/potsynth.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 endif()
 
 if(POTSYNTH_EXAMPLES)
@@ -158,6 +176,8 @@ if(POTSYNTH_EXAMPLES)
   target_link_libraries(example_mag PRIVATE potsynth)
   add_executable(example_grav examples/example_grav.c)
   target_link_libraries(example_grav PRIVATE potsynth)
+  add_executable(example_vsh examples/example_vsh.c)
+  target_link_libraries(example_vsh PRIVATE potsynth)
 endif()
 
 if(POTSYNTH_TESTS)

@@ -179,6 +179,57 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
   return w;
 }
 
+/*
+potsynth_radial_alloc_caller()
+  Radial workspace of a model with radial functions of the caller: nrad
+functions that are evaluated by the caller's function at each point, so that
+there is nothing to expand: all coefficients beta are 1
+
+Inputs: nrad  - number of radial functions
+        lmax  - maximum degree
+        nchan - number of channels
+
+Return: pointer to workspace, or NULL on error
+
+Notes:
+1) basis is 1 for each function (one Chebyshev term), which is only used to
+rank the nodes of the window check
+*/
+
+potsynth_radial_workspace *
+potsynth_radial_alloc_caller(const size_t nrad, const size_t lmax, const size_t nchan)
+{
+  const size_t nbeta = nchan * nrad * (lmax + 1);
+  potsynth_radial_workspace * w;
+  size_t i;
+
+  w = calloc(1, sizeof(potsynth_radial_workspace));
+  if (w == NULL)
+    {
+      POTSYNTH_ERROR_NULL ("unable to allocate radial workspace", POTSYNTH_ENOMEM);
+    }
+
+  w->uc = 1.0;
+  w->ud = 0.0;
+  w->rho = nrad;
+  w->ncheb = 1;
+  w->basis = potsynth_aligned_calloc(nrad * sizeof(double));
+  w->beta = potsynth_aligned_calloc(nbeta * sizeof(double));
+  if (w->basis == NULL || w->beta == NULL)
+    {
+      potsynth_radial_free(w);
+      POTSYNTH_ERROR_NULL ("unable to allocate radial workspace", POTSYNTH_ENOMEM);
+    }
+
+  for (i = 0; i < nrad; ++i)
+    w->basis[i] = 1.0;
+
+  for (i = 0; i < nbeta; ++i)
+    w->beta[i] = 1.0;
+
+  return w;
+}
+
 void
 potsynth_radial_free(potsynth_radial_workspace * w)
 {

@@ -6,6 +6,7 @@ Usage: POTSYNTH_LIBRARY=/path/to/libpotsynth.so python test_python.py
 With POTSYNTH_TEST_INSTALLED=1 the installed package (e.g. from a wheel) is
 tested instead of the source tree.
 """
+import ctypes
 import os
 import sys
 
@@ -291,6 +292,252 @@ def test_geodesy():
     print("  geodesy checks done")
 
 
+_RADIAL_C = r"""
+#include <stddef.h>
+/* barycentric interpolation; params: n, then n nodes, then n weights (doubles) */
+int radial_bary(double r, size_t * first, size_t * n, double * f, double * df, void * params)
+{
+  const double * p = (const double *) params;
+  const size_t nn = (size_t) p[0];
+  const double * x = p + 1, * w = p + 1 + nn;
+  double sum = 0.0;
+  size_t j, hit = nn;
+
+  (void) df;
+  if (!(r >= x[0] && r <= x[nn - 1]))
+    return 3; /* POTSYNTH_EDOM */
+
+  for (j = 0; j < nn; ++j)
+    if (r == x[j])
+      hit = j;
+
+  for (j = 0; j < nn; ++j)
+    {
+      f[j] = (hit < nn) ? (j == hit ? 1.0 : 0.0) : w[j] / (r - x[j]);
+      sum += f[j];
+    }
+
+  for (j = 0; j < nn; ++j)
+    f[j] /= sum;
+
+  *first = 0;
+  *n = nn;
+  return 0;
+}
+"""
+
+
+def _compiled_radial(tmpdir):
+    """A compiled radial function as a ctypes function pointer, or None without a C compiler"""
+    import shutil
+    import subprocess
+    cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    if cc is None:
+        return None
+    src = os.path.join(tmpdir, "potsynth_test_radial.c")
+    lib = os.path.join(tmpdir, "potsynth_test_radial.so")
+    with open(src, "w") as f:
+        f.write(_RADIAL_C)
+    if subprocess.call([cc, "-O2", "-shared", "-fPIC", "-o", lib, src]) != 0:
+        return None
+    dll = ctypes.CDLL(lib)
+    _compiled_radial.keep = dll
+    return dll.radial_bary
+
+
+def test_vsh():
+    """Vector spherical harmonic models, radial functions, rows, colatitude range, model files"""
+    import tempfile
+    rng = np.random.default_rng(1)
+    L, N = 20, 400
+    n = potsynth.nlm(1, L)
+    th = np.arccos(rng.uniform(-1.0, 1.0, N))
+    ph = rng.uniform(0.0, 2.0 * np.pi, N)
+    a, b, c = (rng.normal(size=(3, n)) * 0.95 ** np.arange(n)[None, :] for _ in range(3))
+
+    # fields on the sphere: fast against direct, all quantities; no radii
+    m = potsynth.VshModel(a, b, c, quantities="V,div,curl", method="fast")
+    d = potsynth.VshModel(a, b, c, quantities="V,div,curl", method="direct")
+    V, Vd = m(None, th, ph), d(None, th, ph)
+    check(V.shape == (3, 5, N) and m.outputs == ("V_r", "V_theta", "V_phi", "div", "curl"), f"vsh shape {V.shape}")
+    check(m.info["ncomp"] == 12 and m.info["method"] == "fast", f"vsh info {m.info}")
+    err = max(np.max(np.abs(V[:, q] - Vd[:, q])) / np.max(np.abs(Vd[:, q])) for q in range(5))
+    check(err < 3e-10, f"vsh fast vs direct: {err:.2e}")
+
+    # against the generic model: V_r = sum a Y; V_theta = b dP - c Psin d/dphi (Schmidt -> full)
+    full = np.concatenate([np.full(2 * l + 1, 1.0 / np.sqrt(2 * l + 1)) for l in range(1, L + 1)])
+    ch = [potsynth.Channel(0, "P"), potsynth.Channel(0, "dP"), potsynth.Channel(0, "Psin", dphi=1)]
+    one = np.ones(N)
+    ga = potsynth.Model(a[0] * full, 1, L, ch[:1], 1.0, method="direct")(one, th, ph)
+    gb = potsynth.Model(b[0] * full, 1, L, ch[1:], 1.0, method="direct")(one, th, ph)
+    gc = potsynth.Model(c[0] * full, 1, L, ch[1:], 1.0, method="direct")(one, th, ph)
+    ref = np.array([ga[0], gb[0] - gc[1], gb[1] + gc[0]])
+    err = np.max(np.abs(Vd[0, :3] - ref)) / np.max(np.abs(ref))
+    check(err < 1e-13, f"vsh against generic channels: {err:.2e}")
+
+    # rows: the same values, point after point
+    R = m.rows(None, th, ph)
+    check(R.shape == (N, 15) and np.array_equal(R.reshape(N, 3, 5), np.moveaxis(V, -1, 0)), "vsh rows")
+    mm = potsynth.MagModel(a[0], lmax=L, rmin=6700.0, rmax=6900.0, method="fast")
+    rr = rng.uniform(6700.0, 6900.0, N)
+    check(np.array_equal(mm.rows(rr, th, ph).T, np.array(mm(rr, th, ph))), "magnetic rows")
+
+    # parts of the field
+    h = potsynth.VshModel(None, b, c, quantities="V_h", method="direct")
+    check(h.outputs == ("V_theta", "V_phi") and np.array_equal(h(None, th, ph), Vd[:, 1:3]), "vsh horizontal part")
+
+    # radial functions of the caller: coefficient sets p(r_j) a give p(r) V_0
+    nodes = np.array([6700.0, 6780.0, 6850.0, 6900.0])
+    wts = np.array([1.0 / np.prod(np.delete(nodes[j] - nodes, j)) for j in range(4)])
+    p = lambda r: 2.0 + 0.3 * (r - 6800.0) - 1e-3 * (r - 6800.0) ** 2
+    dp = lambda r: 0.3 - 2e-3 * (r - 6800.0)
+    v0 = potsynth.VshModel(a[:1], None, None, quantities="V_r", method="direct")(None, th, ph)[0, 0]
+
+    def bary(r):
+        """barycentric interpolation between the nodes: all four functions"""
+        if not nodes[0] <= r <= nodes[-1]:
+            return None
+        d = r - nodes
+        if np.any(d == 0.0):
+            return 0, (d == 0.0).astype(float)
+        f = wts / d
+        return 0, f / f.sum()
+
+    def hermite(r):
+        """cubic Hermite interpolation: value and derivative functions of two nodes"""
+        if not nodes[0] <= r <= nodes[-1]:
+            return None
+        k = min(int(np.searchsorted(nodes, r, side="right")) - 1, nodes.size - 2)
+        h = nodes[k + 1] - nodes[k]
+        t = (r - nodes[k]) / h
+        return 2 * k, (2 * t**3 - 3 * t**2 + 1, h * (t**3 - 2 * t**2 + t), -2 * t**3 + 3 * t**2, h * (t**3 - t**2))
+
+    A = {"bary": a[:1, None, :] * p(nodes)[None, :, None],
+         "hermite": a[:1, None, :] * np.stack([p(nodes), dp(nodes)], axis=1).ravel()[None, :, None]}
+    models = {}
+    for kind, func, nthreads in (("bary", bary, 1), ("bary", bary, 2), ("hermite", hermite, 2)):
+        rad = potsynth.Radial(A[kind].shape[1], func, rmin=nodes[0], rmax=nodes[-1])
+        mr = potsynth.VshModel(A[kind], None, None, quantities="V_r", radial=rad, method="fast", eps=1e-12,
+                               nthreads=nthreads)
+        v = mr(rr, th, ph)[0, 0]
+        err = np.max(np.abs(v - p(rr) * v0)) / np.max(np.abs(p(rr) * v0))
+        check(err < 1e-11, f"Python radial function {kind}, {nthreads} threads: {err:.2e}")
+        models[kind] = (mr, rad, v)
+        try:
+            mr(rr + 500.0, th, ph)
+            check(False, f"radial {kind}: radius outside accepted")
+        except potsynth.DomainError:
+            pass
+        try:
+            mr(None, th, ph)
+            check(False, f"radial {kind}: missing radii accepted")
+        except ValueError:
+            pass
+
+    # an exception in a Python radial function is raised by the evaluation
+    def broken(r):
+        if r > 6850.0:
+            raise ZeroDivisionError("radial function failed")
+        return bary(r)
+
+    rad = potsynth.Radial(4, broken, rmin=nodes[0], rmax=6840.0)
+    mb = potsynth.VshModel(A["bary"], None, None, quantities="V_r", radial=rad, method="fast")
+    try:
+        mb(np.full(3, 6860.0), th[:3], ph[:3])
+        check(False, "exception of a radial function not raised")
+    except ZeroDivisionError:
+        pass
+    check(np.allclose(mb(rr[:5] * 0 + 6800.0, th[:5], ph[:5])[0, 0], p(6800.0) * v0[:5], rtol=1e-8),
+          "model usable after an exception")
+
+    # a compiled radial function (needs a C compiler; skipped without one)
+    compiled = _compiled_radial(tempfile.gettempdir())
+    if compiled is None:
+        print("  no C compiler: compiled radial function not tested")
+    else:
+        par = np.concatenate([[4.0], nodes, wts])
+        for give in ("ctypes", "address"):
+            func = compiled if give == "ctypes" else ctypes.cast(compiled, ctypes.c_void_p).value
+            rad = potsynth.Radial(4, func, params=par, rmin=nodes[0], rmax=nodes[-1])
+            mc = potsynth.VshModel(A["bary"], None, None, quantities="V_r", radial=rad, method="fast", eps=1e-12,
+                                   nthreads=2)
+            v = mc(rr, th, ph)[0, 0]
+            err = np.max(np.abs(v - p(rr) * v0)) / np.max(np.abs(p(rr) * v0))
+            check(err < 1e-11, f"compiled radial function ({give}): {err:.2e}")
+            try:
+                mc(rr + 500.0, th, ph)
+                check(False, "compiled radial function: radius outside accepted")
+            except potsynth.DomainError:
+                pass
+
+    try:
+        import numba
+    except ImportError:
+        numba = None
+    if numba is not None:
+        from numba import carray, cfunc, types
+        sig = types.intc(types.double, types.CPointer(types.uintp), types.CPointer(types.uintp),
+                         types.CPointer(types.double), types.CPointer(types.double), types.voidptr)
+        xn, wn = tuple(nodes), tuple(wts)
+
+        @cfunc(sig)
+        def nb_bary(r, first, n, f, df, params):
+            if not (r >= xn[0] and r <= xn[3]):
+                return 3
+            out = carray(f, 4)
+            s = 0.0
+            hit = -1
+            for j in range(4):
+                if r == xn[j]:
+                    hit = j
+            for j in range(4):
+                out[j] = (1.0 if j == hit else 0.0) if hit >= 0 else wn[j] / (r - xn[j])
+                s += out[j]
+            for j in range(4):
+                out[j] /= s
+            first[0] = 0
+            n[0] = 4
+            return 0
+
+        rad = potsynth.Radial(4, nb_bary, rmin=nodes[0], rmax=nodes[-1])
+        mn = potsynth.VshModel(A["bary"], None, None, quantities="V_r", radial=rad, method="fast", eps=1e-12)
+        v = mn(rr, th, ph)[0, 0]
+        err = np.max(np.abs(v - p(rr) * v0)) / np.max(np.abs(p(rr) * v0))
+        check(err < 1e-11, f"numba radial function: {err:.2e}")
+
+    # model files
+    mr, rad, v = models["bary"]
+    name = os.path.join(tempfile.gettempdir(), "potsynth_test_python_model.bin")
+    mr.write(name)
+    m2 = potsynth.read(name, radial=rad)
+    check(np.array_equal(m2(rr, th, ph)[0], v) and m2.info["rho"] == rad.n, "model file")
+    try:
+        potsynth.read(name)
+        check(False, "model file read without its radial functions")
+    except potsynth.PotsynthError:
+        pass
+    os.remove(name)
+    try:
+        d.write(name)
+        check(False, "direct model written")
+    except potsynth.PotsynthError:
+        pass
+
+    # colatitude range
+    cap = potsynth.MagModel(a[0], lmax=L, rmin=6700.0, rmax=6900.0, method="fast", theta_max=0.8)
+    inside = th < 0.8
+    check(cap.info["nrows"] < mm.info["nrows"], "colatitude range: fewer rows")
+    check(np.array_equal(np.array(cap(rr[inside], th[inside], ph[inside])),
+                         np.array(mm(rr[inside], th[inside], ph[inside]))), "colatitude range: same values")
+    try:
+        cap(6800.0, 1.0, 0.0)
+        check(False, "colatitude range: point outside accepted")
+    except potsynth.DomainError:
+        pass
+
+    print("  vsh, radial functions, rows, model files and colatitude range checks done")
+
+
 def test_version():
     # the Python package and the C library carry the same version
     import re
@@ -308,5 +555,6 @@ if __name__ == "__main__":
     test_grav()
     test_hessian()
     test_geodesy()
+    test_vsh()
     print("FAILED" if nfail else "all passed")
     sys.exit(1 if nfail else 0)

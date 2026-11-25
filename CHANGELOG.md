@@ -42,6 +42,27 @@ First public release.
   exceeds `eps`.
 - Read-only model workspace shared between threads; evaluation does not allocate memory.
   OpenMP parallelism (optional).
+- Models with several coefficient sets (`potsynth_alloc_sets`): an output is a sum of
+  terms, each one operator applied to one set, and all outputs share one grid. Fields
+  that are not gradients of one potential, and many fields at once, are evaluated with
+  one window sum per point. `potsynth_alloc` is the case of one set.
+- Radial functions of the caller in place of the powers of a/r (`potsynth_radial`): a
+  function that returns the radial basis functions that are nonzero at a radius, for
+  fields tabulated at radial nodes with any linear interpolation rule, splines or
+  analytic profiles. Only the functions that are nonzero at a point are summed. The
+  library has no interpolation of its own; the tests have examples.
+- Field components for the accuracy can be given by the caller (`component` and `weight`
+  of an output); `ncomp` in `potsynth_info`.
+- `potsynth_eval_rows`: the outputs of a point next to each other (rows of a design
+  matrix), for both methods and all front-ends.
+- Model files (`potsynth_write`, `potsynth_read`): a model of the fast method is written
+  after its set-up and read instead of being set up again.
+- The window check after the set-up tests each component against a direct sum of its
+  own channels, so its cost does not grow with the number of fields; the copy of the
+  coefficients is freed after the set-up of a fast model.
+- Colatitude range of the evaluation points (`theta_min`, `theta_max` of the
+  parameters): the fast method stores only the grid rows of the range, with identical
+  results; for data in a polar cap or a region.
 
 ### Front-ends
 
@@ -49,6 +70,10 @@ First public release.
   semi-normalized Gauss coefficients; Swarm SHC reader (e.g. LCS-1).
 - Gravity (`potsynth_grav.h`): potential V, acceleration g and gravity gradient tensor
   T from fully normalized coefficients; ICGEM `.gfc` reader (EGM2008, EIGEN, XGM, ...).
+- Vector spherical harmonics (`potsynth_vsh.h`): any number of vector fields
+  sum f_j(r) [a Y r + b Psi + c Phi] with radial functions of the caller; the field,
+  its surface divergence and the radial component of its curl; Schmidt or fully
+  normalized coefficients. The model is an ordinary workspace.
 - Geodetic helpers: WGS84/GRS80 ellipsoids, geodetic to geocentric coordinates, normal
   field zonal coefficients, normal gravity. The "Gravity recipes" chapter of the
   documentation shows how to compute disturbances, anomalies, height anomalies,
@@ -58,6 +83,10 @@ First public release.
 
 - `potsynth` package (ctypes and NumPy): `MagModel`, `GravModel`, the generic `Model`,
   readers, geodetic helpers and tensor rotations.
+- `VshModel`, with radial functions of the caller (`Radial`) given as a Python function
+  or as a compiled one (ctypes, numba, Cython);
+  `rows()` (the outputs of a point next to each other), the colatitude range
+  (`theta_min`, `theta_max`) and model files (`write()`, `potsynth.read()`) for all models.
 - Wheels for Linux (x86-64, aarch64), macOS (arm64, x86-64) and Windows (AMD64). The
   x86-64 wheels contain an AVX2/FMA build and a portable build of the library and select
   one at import time.

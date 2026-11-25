@@ -72,6 +72,7 @@ typedef struct
   int * tpost;          /* factor after the sum (POTSYNTH_POST_xxx) */
   size_t * tsub;        /* term number within the channel */
   size_t * tchan;       /* channel of each term pair */
+  size_t * tpart;       /* part (operator and coefficient set) of each term pair */
   int needG;            /* 1 if any term uses column G */
   cfft_plan pt;         /* FFT of length Nt */
   cfft_plan p1;         /* FFT of length nf1 */
@@ -85,7 +86,10 @@ static void fast_state_free(fast_state_t * state);
 static int fast_order(const size_t m, const fast_state_t * state, fast_thread * thread,
                       potsynth_workspace * w);
 static int fast_row(const size_t row, double * R, const fast_state_t * state, potsynth_workspace * w);
-static int op_family(const int op, const int dphi);
+static int chan_same_sets(const potsynth_workspace * w, const size_t c, const size_t c2);
+static size_t check_select(const potsynth_workspace * w, const size_t * grp, const size_t ngrp, size_t * sel);
+static int check_direct(const potsynth_workspace * w, const size_t nsel, const size_t * sel, const size_t n,
+                        const double * r, const double * th, const double * ph, double * out);
 static long floor_mod(const long a, const long n);
 
 /*
@@ -127,7 +131,13 @@ potsynth_fast_init(potsynth_workspace * w)
       POTSYNTH_ERROR ("unable to allocate radial weights", POTSYNTH_ENOMEM);
     }
 
-  potsynth_radial_weights(w, 1, wn);
+  status = potsynth_radial_weights(w, 1, wn);
+  if (status)
+    {
+      free(wn);
+      return status; /* reported by potsynth_radial_weights() */
+    }
+
   tol = potsynth_radial_tol(&(w->params));
 
   /* window width: widen it where a quantity has more of its power near the band
@@ -138,14 +148,24 @@ potsynth_fast_init(potsynth_workspace * w)
       const size_t nmin = (size_t) ceil(w->sigma * nband);
       const size_t nf = potsynth_next_smooth((nmin > 2 * (size_t) w->w) ? nmin : 2 * (size_t) w->w, 2);
 
+      /* radial functions of the caller: no powers of a/r (u = 1) */
       w->w = potsynth_window_choose_shell(w->params.eps, w->sigma, L, nf, w->lmin, w->nchan, w->rpow,
-                                          wn, w->a / w->rmax, w->a / w->rmin);
+                                          wn, (w->nrad > 0) ? 1.0 : w->a / w->rmax,
+                                          (w->nrad > 0) ? 1.0 : w->a / w->rmin);
       w->beta = M_PI * (1.0 - 1.0 / (2.0 * w->sigma)) * w->w;
       w->half = 0.5 * w->w;
     }
 
-  w->radial_workspace_p = potsynth_radial_alloc(w->a / w->rmax, w->a / w->rmin, w->lmin, L,
-                                                w->nchan, w->rpow, wn, tol);
+  /* the radial basis does not depend on the window: it is kept when the set-up is
+     repeated with a wider one */
+  if (w->radial_workspace_p == NULL)
+    {
+      if (w->nrad > 0)
+        w->radial_workspace_p = potsynth_radial_alloc_caller(w->nrad, L, w->nchan);
+      else
+        w->radial_workspace_p = potsynth_radial_alloc(w->a / w->rmax, w->a / w->rmin, w->lmin, L,
+                                                      w->nchan, w->rpow, wn, tol);
+    }
   free(wn);
   if (w->radial_workspace_p == NULL)
     return POTSYNTH_EINVAL; /* reported by potsynth_radial_alloc() */
@@ -161,9 +181,10 @@ potsynth_fast_init(potsynth_workspace * w)
   w->inv_h1 = w->nf1 / (2.0 * M_PI);
   w->inv_h2 = w->nf2 / (2.0 * M_PI);
 
-  /* rows that windows of points with theta in [0,pi] can touch, plus one */
-  w->row_lo = (long) ceil(-w->half) - 1;
-  w->row_hi = (long) ceil(M_PI * w->inv_h1 - w->half) + w->w;
+  /* rows that windows of points with theta in [th_lo,th_hi] can touch, plus one
+     ([0,pi] unless a colatitude range is given) */
+  w->row_lo = (long) ceil(w->th_lo * w->inv_h1 - w->half) - 1;
+  w->row_hi = (long) ceil(w->th_hi * w->inv_h1 - w->half) + w->w;
 
   /* columns for phi in [0,2pi), with periodic padding so windows never wrap */
   w->col_lo = (long) ceil(-w->half) - 1;
@@ -272,18 +293,23 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
       POTSYNTH_ERROR ("unable to allocate set-up data", POTSYNTH_ENOMEM);
     }
 
+  /* the terms of a channel are those of its parts, one after the other */
   state->nterm = 0;
   for (j = 0; j < w->nchan; ++j)
     {
+      size_t p;
+
       state->tbase[j] = state->nterm;
-      state->nterm += potsynth_op_nterm(w->theta_op[j]) * w->radial_workspace_p->rho;
+      for (p = w->pbase[j]; p < w->pbase[j + 1]; ++p)
+        state->nterm += potsynth_op_nterm(w->ptheta[p]) * w->radial_workspace_p->rho;
     }
 
   state->tcol = malloc(state->nterm * sizeof(int));
   state->tpost = malloc(state->nterm * sizeof(int));
   state->tsub = malloc(state->nterm * sizeof(size_t));
   state->tchan = malloc(state->nterm * sizeof(size_t));
-  if (!state->tcol || !state->tpost || !state->tsub || !state->tchan)
+  state->tpart = malloc(state->nterm * sizeof(size_t));
+  if (!state->tcol || !state->tpost || !state->tsub || !state->tchan || !state->tpart)
     {
       POTSYNTH_ERROR ("unable to allocate set-up data", POTSYNTH_ENOMEM);
     }
@@ -292,17 +318,19 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
   for (j = 0; j < w->nchan; ++j)
     {
       const size_t rho = w->radial_workspace_p->rho;
-      size_t t, i2;
+      size_t p, t, t0 = 0, i2;
 
-      for (t = 0; t < potsynth_op_nterm(w->theta_op[j]); ++t)
+      for (p = w->pbase[j]; p < w->pbase[j + 1]; t0 += potsynth_op_nterm(w->ptheta[p]), ++p)
+      for (t = 0; t < potsynth_op_nterm(w->ptheta[p]); ++t)
         {
           for (i2 = 0; i2 < rho; ++i2)
             {
-              const size_t kt = state->tbase[j] + t * rho + i2;
+              const size_t kt = state->tbase[j] + (t0 + t) * rho + i2;
 
-              potsynth_op_term(w->theta_op[j], t, &(state->tcol[kt]), &(state->tpost[kt]));
+              potsynth_op_term(w->ptheta[p], t, &(state->tcol[kt]), &(state->tpost[kt]));
               state->tsub[kt] = t;
               state->tchan[kt] = j;
+              state->tpart[kt] = p;
               if (state->tcol[kt] == POTSYNTH_COL_G)
                 state->needG = 1;
             }
@@ -420,6 +448,9 @@ fast_state_free(fast_state_t * state)
   if (state->tchan)
     free(state->tchan);
 
+  if (state->tpart)
+    free(state->tpart);
+
   if (state->pt)
     destroy_cfft_plan(state->pt);
 
@@ -528,37 +559,33 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
     {
       const size_t c = state->tchan[k];
       const size_t i = (k - state->tbase[c]) % rho;
-      const int op = w->theta_op[c];
+      const size_t p = state->tpart[k];
       const double * beta = w->radial_workspace_p->beta + (c * rho + i) * L1;
-      const double * rfac = w->rfac + c * L1;
+      const double * C = w->C + potsynth_part_set(w, p, i) * w->nalf;
+      const double * S = w->S + potsynth_part_set(w, p, i) * w->nalf;
       double * wa = thread->W + 2 * k * L1;
       double * wb = wa + L1;
-      size_t lstart = (w->lmin > m) ? w->lmin : m;
+      /* factors per degree in wa, then the coefficients */
+      const size_t lstart = potsynth_term_factors(w, p, state->tsub[k], m, beta, wa);
 
       thread->src[k] = (unsigned char) state->tcol[k];
-
-      /* P/sin and S2B are not defined for m = 0 */
-      if ((op == POTSYNTH_THETA_PSIN || op == POTSYNTH_THETA_S2B) && m == 0)
-        lstart = L + 1;
-
       thread->n0[k] = lstart - m;
 
       for (l = m; l <= L; ++l)
         {
           const size_t idx = potsynth_alf_idx(l, m, L);
-          const double f = (l >= lstart) ?
-                           beta[l] * rfac[l] * potsynth_op_factor(op, state->tsub[k], l, m) : 0.0;
+          const double f = wa[l - m];
           double A, B;
 
-          if (w->dphi[c] == 0)
+          if (w->pdphi[p] == 0)
             {
-              A = w->C[idx];
-              B = w->S[idx];
+              A = C[idx];
+              B = S[idx];
             }
           else
             {
-              A = dm * w->S[idx];
-              B = -dm * w->C[idx];
+              A = dm * S[idx];
+              B = -dm * C[idx];
             }
 
           wa[l - m] = f * A;
@@ -586,10 +613,10 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
     {
       const size_t c = k / rho;
       const size_t i = k % rho;
-      const int op = w->theta_op[c];
-      const size_t nt = potsynth_op_nterm(op);
-      const int typeE = (op == POTSYNTH_THETA_DP || op == POTSYNTH_THETA_S2B);
-      const int even = (op == POTSYNTH_THETA_P || op == POTSYNTH_THETA_S2A || op == POTSYNTH_THETA_S2B);
+      /* the parts of a channel have the same sign rule under theta -> 2pi - theta
+         (potsynth_alloc_sets()); the rule under theta -> pi - theta is that of each part */
+      const int op0 = w->ptheta[w->pbase[c]];
+      const int even = (op0 == POTSYNTH_THETA_P || op0 == POTSYNTH_THETA_S2A || op0 == POTSYNTH_THETA_S2B);
       const double sgn = even ? ((m & 1) ? -1.0 : 1.0) : ((m & 1) ? 1.0 : -1.0);
       const double pfac = (m == 0) ? 1.0 : 0.5;
       double * H = thread->H;
@@ -598,13 +625,20 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
 
       for (j = 0; j < state->nq; ++j)
         {
+          double vA = 0.0, vB = 0.0, uA = 0.0, uB = 0.0;
+          size_t part, t0 = 0;
+
+          for (part = w->pbase[c]; part < w->pbase[c + 1]; ++part)
+          {
+          const int op = w->ptheta[part];
+          const size_t nt = potsynth_op_nterm(op);
+          const int typeE = (op == POTSYNTH_THETA_DP || op == POTSYNTH_THETA_S2B);
           double ae = 0.0, ao = 0.0, be = 0.0, bo = 0.0;
-          double vA, vB, uA, uB;
           size_t t;
 
           for (t = 0; t < nt; ++t)
             {
-              const size_t kt = state->tbase[c] + t * rho + i;
+              const size_t kt = state->tbase[c] + (t0 + t) * rho + i;
               const int post = state->tpost[kt];
               const double * S = thread->S + 4 * kt * nqp;
               const int xf = (post == POTSYNTH_POST_XSM || post == POTSYNTH_POST_XSM2);
@@ -638,10 +672,23 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
             }
 
           /* theta_j and pi - theta_j */
-          vA = ae + ao;
-          vB = be + bo;
-          uA = typeE ? (ao - ae) : (ae - ao);
-          uB = typeE ? (bo - be) : (be - bo);
+          if (part == w->pbase[c])
+            {
+              vA = ae + ao;
+              vB = be + bo;
+              uA = typeE ? (ao - ae) : (ae - ao);
+              uB = typeE ? (bo - be) : (be - bo);
+            }
+          else
+            {
+              vA += ae + ao;
+              vB += be + bo;
+              uA += typeE ? (ao - ae) : (ae - ao);
+              uB += typeE ? (bo - be) : (be - bo);
+            }
+
+          t0 += nt;
+          }
 
           /* H = vA - i vB */
           H[2 * j] = vA;
@@ -687,7 +734,7 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
           double * g = row + (size_t) (0 - w->col_lo) * w->nchp;
 
           for (k = 0; k < npair; ++k)
-            g[k] = thread->Z[2 * k * nf1 + 2 * lrow];
+            g[potsynth_layer(w, k / rho, k % rho, rho)] = thread->Z[2 * k * nf1 + 2 * lrow];
         }
       else
         {
@@ -696,8 +743,10 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
 
           for (k = 0; k < npair; ++k)
             {
-              gr[k] = thread->Z[2 * k * nf1 + 2 * lrow];
-              gi[k] = thread->Z[2 * k * nf1 + 2 * lrow + 1];
+              const size_t q = potsynth_layer(w, k / rho, k % rho, rho);
+
+              gr[q] = thread->Z[2 * k * nf1 + 2 * lrow];
+              gi[q] = thread->Z[2 * k * nf1 + 2 * lrow + 1];
             }
         }
     }
@@ -760,31 +809,63 @@ Notes:
 radial power (potsynth_radial_alloc)
 */
 
-void
+int
 potsynth_radial_weights(const potsynth_workspace * w, const int normalize, double * wn)
 {
   const size_t L = w->lmax;
   const size_t L1 = L + 1;
-  size_t c, l, m;
+  const size_t nchan = w->nchan;
+  const size_t nsetr = potsynth_nsetr(w); /* coefficient sets of a part */
+  size_t * grp = malloc(nchan * sizeof(size_t));
+  size_t * plist = malloc(w->npart * sizeof(size_t));
+  size_t * pchan = malloc(w->npart * sizeof(size_t));
+  size_t ngrp, g, c, l, m;
 
-  memset(wn, 0, w->nchan * L1 * sizeof(double));
-
-  for (c = 0; c < w->nchan; ++c)
+  if (grp == NULL || plist == NULL || pchan == NULL)
     {
-      const int fam = op_family(w->theta_op[c], w->dphi[c]);
+      free(grp);
+      free(plist);
+      free(pchan);
+      POTSYNTH_ERROR ("unable to allocate quantities", POTSYNTH_ENOMEM);
+    }
+
+  for (c = 0; c < nchan; ++c)
+    {
+      size_t p;
+
+      for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
+        pchan[p] = c;
+    }
+
+  memset(wn, 0, nchan * L1 * sizeof(double));
+
+  ngrp = potsynth_quantities(w, grp);
+
+  for (g = 0; g < ngrp; ++g)
+    {
+      size_t c0 = nchan, np = 0, s, i;
       double norm = 0.0;
-      size_t c2;
-      int seen = 0;
 
-      for (c2 = 0; c2 < c; ++c2)
+      /* parts of the channels of the quantity, ordered by coefficient set and
+         within a set by channel and part (insertion sort: the lists are short) */
+      for (c = 0; c < nchan; ++c)
         {
-          if (fam >= 0 && w->rpow[c2] == w->rpow[c] &&
-              op_family(w->theta_op[c2], w->dphi[c2]) == fam)
-            seen = 1;
-        }
+          size_t p;
 
-      if (seen)
-        continue; /* weights set with the first channel of the quantity */
+          if (grp[c] != g)
+            continue;
+
+          if (c0 == nchan)
+            c0 = c;
+
+          for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
+            {
+              for (i = np; i > 0 && w->pset[plist[i - 1]] > w->pset[p]; --i)
+                plist[i] = plist[i - 1];
+              plist[i] = p;
+              ++np;
+            }
+        }
 
       for (l = w->lmin; l <= L; ++l)
         {
@@ -794,26 +875,47 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
           for (m = 0; m <= M; ++m)
             {
               const size_t idx = potsynth_alf_idx(l, m, L);
-              const double cs = w->C[idx] * w->C[idx] + w->S[idx] * w->S[idx];
-              double q = 0.0;
 
-              for (c2 = c; c2 < w->nchan; ++c2)
+              /* sum over the sets of (power of the set) x (sum over its parts) */
+              for (i = 0; i < np; i = s)
                 {
-                  if (c2 == c || (fam >= 0 && w->rpow[c2] == w->rpow[c] &&
-                                  op_family(w->theta_op[c2], w->dphi[c2]) == fam))
+                  const size_t set = w->pset[plist[i]];
+                  double cs, q = 0.0;
+
+                  if (nsetr == 1)
                     {
-                      const double rf = w->rfac[c2 * L1 + l];
-                      /* spin 2: the quantity is (S2A, 2 S2B), with an m-independent norm */
-                      const double g = (fam == 2 && w->theta_op[c2] == POTSYNTH_THETA_S2B) ? 4.0 : 1.0;
-
-                      q += g * rf * rf * potsynth_op_msq(w->theta_op[c2], w->dphi[c2], l, m);
+                      const double C = w->C[set * w->nalf + idx], S = w->S[set * w->nalf + idx];
+                      cs = C * C + S * S;
                     }
-                }
+                  else
+                    {
+                      /* radial functions of the caller: the power of all their sets */
+                      size_t j;
 
-              msq += cs * q;
+                      cs = 0.0;
+                      for (j = 0; j < nsetr; ++j)
+                        {
+                          const double C = w->C[(set + j) * w->nalf + idx], S = w->S[(set + j) * w->nalf + idx];
+                          cs += C * C + S * S;
+                        }
+                    }
+
+                  for (s = i; s < np && w->pset[plist[s]] == set; ++s)
+                    {
+                      const size_t p = plist[s];
+                      const double rf = w->prfac[p * L1 + l];
+                      /* weight of the channel in its quantity; spin 2: the quantity is
+                         (S2A, 2 S2B), with an m-independent norm */
+                      const double wt = potsynth_chan_weight(w, pchan[p]);
+
+                      q += wt * wt * rf * rf * potsynth_op_msq(w->ptheta[p], w->pdphi[p], l, m);
+                    }
+
+                  msq += cs * q;
+                }
             }
 
-          wn[c * L1 + l] = sqrt(msq);
+          wn[c0 * L1 + l] = sqrt(msq);
           norm += msq;
         }
 
@@ -821,17 +923,136 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
         {
           norm = 1.0 / sqrt(norm);
           for (l = w->lmin; l <= L; ++l)
-            wn[c * L1 + l] *= norm;
+            wn[c0 * L1 + l] *= norm;
         }
 
       /* the other channels of the quantity share its weights */
-      for (c2 = c + 1; c2 < w->nchan; ++c2)
+      for (c = c0 + 1; c < nchan; ++c)
         {
-          if (fam >= 0 && w->rpow[c2] == w->rpow[c] &&
-              op_family(w->theta_op[c2], w->dphi[c2]) == fam)
-            memcpy(wn + c2 * L1, wn + c * L1, L1 * sizeof(double));
+          if (grp[c] == g)
+            memcpy(wn + c * L1, wn + c0 * L1, L1 * sizeof(double));
         }
     }
+
+  free(grp);
+  free(plist);
+  free(pchan);
+
+  return POTSYNTH_SUCCESS;
+}
+
+/*
+potsynth_chan_weight()
+  Weight of a channel in the magnitude of its quantity: given by the caller, or
+1, and 2 for the off-diagonal part S2B of a spin-2 tensor (which counts twice)
+*/
+
+double
+potsynth_chan_weight(const potsynth_workspace * w, const size_t c)
+{
+  if (w->cwt[c] > 0.0)
+    return w->cwt[c];
+
+  return (potsynth_chan_family(w, c) == 2 && w->ptheta[w->pbase[c]] == POTSYNTH_THETA_S2B) ? 2.0 : 1.0;
+}
+
+/*
+potsynth_chan_family()
+  Field family of a channel (potsynth_op_family()): that of its parts, which
+all have the same operators or are all of family 1 (potsynth_alloc_sets())
+*/
+
+int
+potsynth_chan_family(const potsynth_workspace * w, const size_t c)
+{
+  const size_t p = w->pbase[c];
+  return potsynth_op_family(w->ptheta[p], w->pdphi[p]);
+}
+
+/*
+potsynth_quantities()
+  Quantities (field components) of the channels: channels with the same
+component given by the caller; otherwise channels with the same radial power,
+field family (scalar, surface gradient, spin-2 tensor) and coefficient sets
+form one quantity, and a channel without a family is a quantity of its own
+
+Inputs: w   - workspace, with channels set
+        grp - (output) quantity of each channel, 0..ngrp-1, numbered in the order
+              of their first channels; length nchan
+
+Return: number of quantities
+*/
+
+size_t
+potsynth_quantities(const potsynth_workspace * w, size_t * grp)
+{
+  size_t ngrp = 0;
+  size_t c, c2;
+
+  for (c = 0; c < w->nchan; ++c)
+    {
+      const int fam = potsynth_chan_family(w, c);
+
+      grp[c] = ngrp;
+
+      if (w->ccomp[c] > 0)
+        {
+          /* component given by the caller */
+          for (c2 = 0; c2 < c; ++c2)
+            {
+              if (w->ccomp[c2] == w->ccomp[c])
+                {
+                  grp[c] = grp[c2];
+                  break;
+                }
+            }
+        }
+      else
+        {
+          for (c2 = 0; c2 < c && fam >= 0; ++c2)
+            {
+              if (w->ccomp[c2] == 0 && w->rpow[c2] == w->rpow[c] && potsynth_chan_family(w, c2) == fam &&
+                  chan_same_sets(w, c, c2))
+                {
+                  grp[c] = grp[c2];
+                  break;
+                }
+            }
+        }
+
+      if (grp[c] == ngrp)
+        ++ngrp;
+    }
+
+  return ngrp;
+}
+
+/* 1 if the parts of the channels c and c2 use the same coefficient sets */
+static int
+chan_same_sets(const potsynth_workspace * w, const size_t c, const size_t c2)
+{
+  size_t p, q;
+
+  if (w->nset == 1)
+    return 1;
+
+  for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
+    {
+      for (q = w->pbase[c2]; q < w->pbase[c2 + 1] && w->pset[q] != w->pset[p]; ++q)
+        ;
+      if (q == w->pbase[c2 + 1])
+        return 0;
+    }
+
+  for (q = w->pbase[c2]; q < w->pbase[c2 + 1]; ++q)
+    {
+      for (p = w->pbase[c]; p < w->pbase[c + 1] && w->pset[p] != w->pset[q]; ++p)
+        ;
+      if (p == w->pbase[c + 1])
+        return 0;
+    }
+
+  return 1;
 }
 
 /*
@@ -896,14 +1117,14 @@ potsynth_op_msq(const int op, const int dphi, const size_t l, const size_t m)
 }
 
 /*
-op_family()
+potsynth_op_family()
   Field family of a channel operator: 0 = scalar (P), 1 = surface gradient
 (dP, Psin d/dphi), 2 = spin-2 horizontal tensor (S2A, S2B d/dphi), -1 = none
 (the channel forms a family of its own)
 */
 
-static int
-op_family(const int op, const int dphi)
+int
+potsynth_op_family(const int op, const int dphi)
 {
   if (op == POTSYNTH_THETA_P && dphi == 0)
     return 0;
@@ -942,243 +1163,441 @@ taken, and around each the four cell midpoints (half a grid step from the nodes
 in both angles, where the window error of a band-edge mode peaks), at the bottom,
 middle and top of the shell. CHECK_NRAND points uniform in the shell are added
 for the sizes of the components.
+
 2) The candidate scan is split over the threads, each keeping its own
 CHECK_TOP list per channel; the lists are merged afterwards, so the result does
 not depend on the number of threads (ties apart).
-3) A component is a set of channels with the same radial power and field family
-(eq. 10 of the paper): its error and size at a point are the lengths of the
-vectors its channels form, with the spin-2 B channel counted twice.
+
+3) A component is a set of channels (potsynth_quantities(); eq. 10 of the
+paper): its error and size at a point are the lengths of the vectors its
+channels form, with the weights of the channels (potsynth_chan_weight()).
+
+4) A model with more than CHECK_MAXCOMP components (many fields on one grid) is
+checked for the CHECK_MAXCOMP components with the largest share of their power
+in the highest eighth of the degrees, where the window error is largest, with
+CHECK_TOP_MANY nodes per channel. The direct sum is computed for the channels of
+the checked components only, so that the cost of the check does not grow with
+the number of fields.
 */
 
-#define CHECK_TOP   16
-#define CHECK_NRAND 256
+#define CHECK_TOP      16   /* candidate nodes per channel */
+#define CHECK_NRAND    256  /* random points */
+#define CHECK_MAXCOMP  64   /* components checked of a model with more components */
+#define CHECK_TOP_MANY 2    /* candidate nodes per channel of such a model */
+#define CHECK_CHUNK    256  /* points per evaluation of the fast method */
 
 double
 potsynth_fast_check(potsynth_workspace * w)
 {
   const size_t nchan = w->nchan, rho = w->radial_workspace_p->rho, nchp = w->nchp;
   const size_t nc = w->radial_workspace_p->ncheb;
-  const long rlast = (long) floor(M_PI * w->inv_h1);
+  /* grid rows inside the colatitude range of the points, without the poles */
+  const long rpole = (long) floor(M_PI * w->inv_h1);
+  const long rlo = (long) ceil(w->th_lo * w->inv_h1), rhi = (long) floor(w->th_hi * w->inv_h1) + 1;
+  const long rfirst = (rlo > 1) ? rlo : 1;
+  const long rlast = (rhi < rpole) ? rhi : rpole;
   const int nth = (w->nthreads > 0) ? w->nthreads : 1;
-  size_t ntop = nchan * CHECK_TOP, npt, i, c, k;
-  double * tops = calloc(ntop * (size_t) nth, sizeof(double));
-  long * topr = calloc(ntop * (size_t) nth, sizeof(long)), * topc = calloc(ntop * (size_t) nth, sizeof(long));
+  size_t * grp = malloc(nchan * sizeof(size_t));
+  size_t * sel = malloc(nchan * sizeof(size_t));
   double * b1 = malloc(rho * sizeof(double));
-  double * r = NULL, * th = NULL, * ph = NULL, * of = NULL, * od = NULL;
+  double * tops = NULL, * r = NULL, * th = NULL, * ph = NULL, * of = NULL, * od = NULL;
+  double * buf = NULL, * acc = NULL;
+  long * topr = NULL, * topc = NULL;
   double * omap = w->omap;
-  int method = w->method;
-  int * grp = malloc(nchan * sizeof(int));
-  double * gwt = malloc(nchan * sizeof(double));
-  int ngrp = 0;
+  size_t ngrp = 0, nsel = 0, ctop = CHECK_TOP, ntop = 0, npt = 0, i, c, k;
   double worst = 0.0;
-  potsynth_eval_workspace * ew;
+  int ok = (grp != NULL && sel != NULL && b1 != NULL);
   long row;
   int th0;
 
-  if (!tops || !topr || !topc || !b1 || !grp || !gwt)
-    goto done;
-
-  /* b_i at the bottom of the shell (t = +1: all T_k = 1) */
-  for (i = 0; i < rho; ++i)
+  /* components, and the channels that are checked */
+  if (ok)
     {
-      double s = 0.0;
-      for (k = 0; k < nc; ++k)
-        s += w->radial_workspace_p->basis[i * nc + k];
-      b1[i] = (w->radial_workspace_p->ud > 0.0) ? s : w->radial_workspace_p->basis[i * nc];
+      ngrp = potsynth_quantities(w, grp);
+      nsel = check_select(w, grp, ngrp, sel);
+      ok = (nsel > 0);
+      ctop = (ngrp > CHECK_MAXCOMP) ? CHECK_TOP_MANY : CHECK_TOP;
+      ntop = nsel * ctop;
     }
 
-  /* candidates: largest |Laplacian| of each channel at r = rmin, one list per thread */
+  if (ok)
+    {
+      npt = ntop * 12 + CHECK_NRAND;
+      tops = calloc(ntop * (size_t) nth, sizeof(double));
+      topr = calloc(ntop * (size_t) nth, sizeof(long));
+      topc = calloc(ntop * (size_t) nth, sizeof(long));
+      r = malloc(npt * sizeof(double));
+      th = malloc(npt * sizeof(double));
+      ph = malloc(npt * sizeof(double));
+      of = malloc(nsel * npt * sizeof(double));
+      od = malloc(nsel * npt * sizeof(double));
+      buf = malloc(nchan * CHECK_CHUNK * sizeof(double));
+      acc = calloc(4 * ngrp, sizeof(double));
+      ok = (tops && topr && topc && r && th && ph && of && od && buf && acc);
+    }
+
+  if (ok)
+    {
+      /* b_i at the bottom of the shell (t = +1: all T_k = 1) */
+      for (i = 0; i < rho; ++i)
+        {
+          double s = 0.0;
+          for (k = 0; k < nc; ++k)
+            s += w->radial_workspace_p->basis[i * nc + k];
+          b1[i] = (w->radial_workspace_p->ud > 0.0) ? s : w->radial_workspace_p->basis[i * nc];
+        }
+
+      /* candidates: largest |Laplacian| of each checked channel at r = rmin, one list per thread */
 #pragma omp parallel for private(row) schedule(static) num_threads(nth)
-  for (row = 1; row < rlast; ++row)
-    {
+      for (row = rfirst; row < rlast; ++row)
+        {
 #ifdef _OPENMP
-      const size_t base = (size_t) omp_get_thread_num() * ntop;
+          const size_t base = (size_t) omp_get_thread_num() * ntop;
 #else
-      const size_t base = 0;
+          const size_t base = 0;
 #endif
-      long col;
-      size_t cc;
-      for (col = 0; col < (long) w->nf2; ++col)
-        {
-          for (cc = 0; cc < nchan; ++cc)
+          long col;
+          size_t ck;
+          for (col = 0; col < (long) w->nf2; ++col)
             {
-              const long dr[5] = { 0, -1, 1, 0, 0 }, dc[5] = { 0, 0, 0, -1, 1 };
-              double v[5];
-              size_t q, ii, slot = base + cc * CHECK_TOP, jmin = 0;
-              double lap;
-
-              for (q = 0; q < 5; ++q)
+              for (ck = 0; ck < nsel; ++ck)
                 {
-                  const double * g = w->grid + ((size_t) (row + dr[q] - w->row_lo) * w->ncols +
-                                                (size_t) (col + dc[q] - w->col_lo)) * nchp + cc * rho;
-                  double s = 0.0;
-                  for (ii = 0; ii < rho; ++ii)
-                    s += b1[ii] * g[ii];
-                  v[q] = s;
-                }
+                  const size_t cc = sel[ck];
+                  const long dr[5] = { 0, -1, 1, 0, 0 }, dc[5] = { 0, 0, 0, -1, 1 };
+                  double v[5];
+                  size_t q, ii, slot = base + ck * ctop, jmin = 0;
+                  double lap;
 
-              lap = fabs(v[1] + v[2] + v[3] + v[4] - 4.0 * v[0]);
-              for (q = 1; q < CHECK_TOP; ++q)
-                if (tops[slot + q] < tops[slot + jmin])
-                  jmin = q;
-              if (lap > tops[slot + jmin])
-                {
-                  tops[slot + jmin] = lap;
-                  topr[slot + jmin] = row;
-                  topc[slot + jmin] = col;
+                  for (q = 0; q < 5; ++q)
+                    {
+                      const double * g = w->grid + ((size_t) (row + dr[q] - w->row_lo) * w->ncols +
+                                                    (size_t) (col + dc[q] - w->col_lo)) * nchp;
+                      double s = 0.0;
+                      for (ii = 0; ii < rho; ++ii)
+                        s += b1[ii] * g[potsynth_layer(w, cc, ii, rho)];
+                      v[q] = s;
+                    }
+
+                  lap = fabs(v[1] + v[2] + v[3] + v[4] - 4.0 * v[0]);
+                  for (q = 1; q < ctop; ++q)
+                    if (tops[slot + q] < tops[slot + jmin])
+                      jmin = q;
+                  if (lap > tops[slot + jmin])
+                    {
+                      tops[slot + jmin] = lap;
+                      topr[slot + jmin] = row;
+                      topc[slot + jmin] = col;
+                    }
                 }
             }
         }
-    }
 
-  /* merge the threads' lists into the first */
-  for (th0 = 1; th0 < nth; ++th0)
-    {
-      const size_t base = (size_t) th0 * ntop;
-      for (c = 0; c < nchan; ++c)
+      /* merge the threads' lists into the first */
+      for (th0 = 1; th0 < nth; ++th0)
         {
-          size_t q, q2;
-          for (q = 0; q < CHECK_TOP; ++q)
+          const size_t base = (size_t) th0 * ntop;
+          for (c = 0; c < nsel; ++c)
             {
-              const size_t src = base + c * CHECK_TOP + q;
-              size_t jmin = c * CHECK_TOP;
-              for (q2 = 1; q2 < CHECK_TOP; ++q2)
-                if (tops[c * CHECK_TOP + q2] < tops[jmin])
-                  jmin = c * CHECK_TOP + q2;
-              if (tops[src] > tops[jmin])
+              size_t q, q2;
+              for (q = 0; q < ctop; ++q)
                 {
-                  tops[jmin] = tops[src];
-                  topr[jmin] = topr[src];
-                  topc[jmin] = topc[src];
+                  const size_t src = base + c * ctop + q;
+                  size_t jmin = c * ctop;
+                  for (q2 = 1; q2 < ctop; ++q2)
+                    if (tops[c * ctop + q2] < tops[jmin])
+                      jmin = c * ctop + q2;
+                  if (tops[src] > tops[jmin])
+                    {
+                      tops[jmin] = tops[src];
+                      topr[jmin] = topr[src];
+                      topc[jmin] = topc[src];
+                    }
                 }
             }
         }
-    }
 
-  /* points */
-  npt = ntop * 12 + CHECK_NRAND;
-  r = malloc(npt * sizeof(double));
-  th = malloc(npt * sizeof(double));
-  ph = malloc(npt * sizeof(double));
-  of = malloc(nchan * npt * sizeof(double));
-  od = malloc(nchan * npt * sizeof(double));
-  if (!r || !th || !ph || !of || !od)
-    goto done;
-
-  {
-    const double rad[3] = { w->rmin, 0.5 * (w->rmin + w->rmax), w->rmax };
-    unsigned long long s = 88172645463325252ULL;
-    size_t n = 0, t, d, q;
-
-    for (t = 0; t < ntop; ++t)
+      /* points */
       {
-        if (tops[t] <= 0.0)
-          continue;
-        for (d = 0; d < 4; ++d)
+        const double rad[3] = { w->rmin, 0.5 * (w->rmin + w->rmax), w->rmax };
+        unsigned long long s = 88172645463325252ULL;
+        size_t n = 0, t, d, q;
+
+        for (t = 0; t < ntop; ++t)
           {
-            const double tt = (topr[t] + ((d & 1) ? 0.5 : -0.5)) * w->h1;
-            const double pp = (topc[t] + ((d & 2) ? 0.5 : -0.5)) * w->h2;
-            if (tt < 0.0 || tt > M_PI)
+            if (tops[t] <= 0.0)
               continue;
+            for (d = 0; d < 4; ++d)
+              {
+                const double tt = (topr[t] + ((d & 1) ? 0.5 : -0.5)) * w->h1;
+                const double pp = (topc[t] + ((d & 2) ? 0.5 : -0.5)) * w->h2;
+                if (tt < w->th_lo || tt > w->th_hi)
+                  continue;
+                for (q = 0; q < 3; ++q)
+                  {
+                    r[n] = rad[q];
+                    th[n] = tt;
+                    ph[n] = pp;
+                    ++n;
+                  }
+              }
+          }
+
+        for (t = 0; t < CHECK_NRAND; ++t)
+          {
+            double x[3];
             for (q = 0; q < 3; ++q)
               {
-                r[n] = rad[q];
-                th[n] = tt;
-                ph[n] = pp;
-                ++n;
+                s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+                x[q] = (double) (s >> 11) / 9007199254740992.0;
               }
+            r[n] = cbrt(pow(w->rmin, 3) + x[0] * (pow(w->rmax, 3) - pow(w->rmin, 3)));
+            th[n] = (w->th_lo > 0.0 || w->th_hi < M_PI) ?
+                    fmin(fmax(acos(cos(w->th_lo) - x[1] * (cos(w->th_lo) - cos(w->th_hi))), w->th_lo), w->th_hi) :
+                    acos(1.0 - 2.0 * x[1]);
+            ph[n] = 2.0 * M_PI * x[2];
+            ++n;
           }
+        npt = n;
       }
 
-    for (t = 0; t < CHECK_NRAND; ++t)
+      /* fast method: channel values (no output map) of the checked channels */
       {
-        double x[3];
-        for (q = 0; q < 3; ++q)
+        potsynth_eval_workspace * ew;
+        size_t i0;
+
+        w->omap = NULL;
+        ew = potsynth_eval_alloc(0, w);
+        ok = (ew != NULL);
+
+        for (i0 = 0; i0 < npt && ok; i0 += CHECK_CHUNK)
           {
-            s ^= s << 13; s ^= s >> 7; s ^= s << 17;
-            x[q] = (double) (s >> 11) / 9007199254740992.0;
+            const size_t m = (npt - i0 < CHECK_CHUNK) ? npt - i0 : CHECK_CHUNK;
+
+            ok = (potsynth_eval(m, r + i0, th + i0, ph + i0, buf, ew) == POTSYNTH_SUCCESS);
+
+            for (c = 0; c < nsel && ok; ++c)
+              memcpy(of + c * npt + i0, buf + sel[c] * m, m * sizeof(double));
           }
-        r[n] = cbrt(pow(w->rmin, 3) + x[0] * (pow(w->rmax, 3) - pow(w->rmin, 3)));
-        th[n] = acos(1.0 - 2.0 * x[1]);
-        ph[n] = 2.0 * M_PI * x[2];
-        ++n;
+
+        if (ew)
+          potsynth_eval_free(ew);
+        w->omap = omap;
       }
-    npt = n;
-  }
-
-  /* fast, then direct (channel values: no output map) */
-  w->omap = NULL;
-  ew = potsynth_eval_alloc(0, w);
-  if (ew == NULL || potsynth_eval(npt, r, th, ph, of, ew))
-    {
-      if (ew) potsynth_eval_free(ew);
-      w->omap = omap;
-      goto done;
     }
-  potsynth_eval_free(ew);
 
-  if (potsynth_direct_init(w) == POTSYNTH_SUCCESS)
+  /* direct sum of the checked channels */
+  if (ok)
+    ok = (check_direct(w, nsel, sel, npt, r, th, ph, od) == POTSYNTH_SUCCESS);
+
+  /* components: largest error and largest value of each over the points */
+  if (ok)
     {
-      w->method = POTSYNTH_METHOD_DIRECT;
-      ew = potsynth_eval_alloc(0, w);
-      if (ew == NULL || potsynth_eval(npt, r, th, ph, od, ew))
-        worst = -1.0;
-      if (ew) potsynth_eval_free(ew);
-      w->method = method;
+      double * e2 = acc, * v2 = acc + ngrp, * emax = acc + 2 * ngrp, * vmax = acc + 3 * ngrp;
+      size_t g;
+
+      for (i = 0; i < npt; ++i)
+        {
+          for (c = 0; c < nsel; ++c)
+            e2[grp[sel[c]]] = v2[grp[sel[c]]] = 0.0;
+
+          for (c = 0; c < nsel; ++c)
+            {
+              const double wt = potsynth_chan_weight(w, sel[c]);
+              const double d = of[c * npt + i] - od[c * npt + i];
+
+              e2[grp[sel[c]]] += wt * wt * d * d;
+              v2[grp[sel[c]]] += wt * wt * od[c * npt + i] * od[c * npt + i];
+            }
+
+          for (c = 0; c < nsel; ++c)
+            {
+              g = grp[sel[c]];
+              emax[g] = fmax(emax[g], sqrt(e2[g]));
+              vmax[g] = fmax(vmax[g], sqrt(v2[g]));
+            }
+        }
+
+      for (g = 0; g < ngrp; ++g)
+        {
+          if (vmax[g] > 0.0)
+            worst = fmax(worst, emax[g] / vmax[g]);
+        }
+    }
+
+  free(grp); free(sel); free(b1); free(tops); free(topr); free(topc);
+  free(r); free(th); free(ph); free(of); free(od); free(buf); free(acc);
+
+  return worst;
+}
+
+/*
+check_select()
+  Channels checked by potsynth_fast_check(): all channels, or for a model with
+more than CHECK_MAXCOMP components the channels of the CHECK_MAXCOMP components
+with the largest share of their power in the highest eighth of the degrees
+
+Inputs: w    - workspace
+        grp  - component of each channel (potsynth_quantities())
+        ngrp - number of components
+        sel  - (output) checked channels, ascending; length nchan
+
+Return: number of checked channels (0 if memory could not be allocated)
+*/
+
+static size_t
+check_select(const potsynth_workspace * w, const size_t * grp, const size_t ngrp, size_t * sel)
+{
+  const size_t nchan = w->nchan, L1 = w->lmax + 1;
+  const size_t ltail = w->lmax - w->lmax / 8;
+  size_t nsel = 0, c;
+
+  if (ngrp <= CHECK_MAXCOMP)
+    {
+      for (c = 0; c < nchan; ++c)
+        sel[c] = c;
+
+      return nchan;
     }
   else
-    worst = -1.0;
-  potsynth_direct_free(w);
-  w->doff = NULL; w->tcol = NULL; w->tpost = NULL; w->tchan = NULL; w->dW = NULL;
-  w->omap = omap;
-  if (worst < 0.0)
     {
-      worst = 0.0;
-      goto done;
+      double * wn = malloc(nchan * L1 * sizeof(double));
+      double * tail = calloc(ngrp, sizeof(double));
+      unsigned char * pick = calloc(ngrp, 1);
+      size_t g, k, l;
+
+      if (wn != NULL && tail != NULL && pick != NULL && potsynth_radial_weights(w, 1, wn) == POTSYNTH_SUCCESS)
+        {
+          /* the weights of a component (the same for its channels) have unit sum of squares */
+          for (c = 0; c < nchan; ++c)
+            {
+              double s = 0.0;
+
+              for (l = ltail; l < L1; ++l)
+                s += wn[c * L1 + l] * wn[c * L1 + l];
+
+              tail[grp[c]] = s;
+            }
+
+          for (k = 0; k < CHECK_MAXCOMP; ++k)
+            {
+              size_t gmax = ngrp;
+
+              for (g = 0; g < ngrp; ++g)
+                {
+                  if (!pick[g] && (gmax == ngrp || tail[g] > tail[gmax]))
+                    gmax = g;
+                }
+
+              pick[gmax] = 1;
+            }
+
+          for (c = 0; c < nchan; ++c)
+            {
+              if (pick[grp[c]])
+                sel[nsel++] = c;
+            }
+        }
+
+      free(wn);
+      free(tail);
+      free(pick);
+
+      return nsel;
+    }
+}
+
+/*
+check_direct()
+  Direct sum of some channels of a model at points, for potsynth_fast_check():
+a model of the direct method with these channels only, which shares the
+coefficients of w
+
+Inputs: w    - workspace
+        nsel - number of channels
+        sel  - channels, length nsel
+        n    - number of points
+        r    - radii, length n
+        th   - colatitudes, length n
+        ph   - longitudes, length n
+        out  - (output) channel values out[c*n + i], length nsel*n
+
+Return: success or error
+*/
+
+static int
+check_direct(const potsynth_workspace * w, const size_t nsel, const size_t * sel, const size_t n,
+             const double * r, const double * th, const double * ph, double * out)
+{
+  const size_t L1 = w->lmax + 1;
+  potsynth_workspace ws = *w; /* scalars, coefficients and Legendre workspace of w */
+  potsynth_eval_workspace * ew = NULL;
+  size_t np = 0, c, p, k;
+  int status = POTSYNTH_ENOMEM;
+
+  for (c = 0; c < nsel; ++c)
+    np += w->pbase[sel[c] + 1] - w->pbase[sel[c]];
+
+  ws.method = POTSYNTH_METHOD_DIRECT;
+  ws.nchan = nsel;
+  ws.nout = nsel;
+  ws.omap = NULL;
+  ws.npart = np;
+  ws.grid = NULL;
+  ws.radial_workspace_p = NULL;
+  ws.doff = NULL;
+  ws.tcol = NULL;
+  ws.tpost = NULL;
+  ws.tchan = NULL;
+  ws.dW = NULL;
+  ws.rpow = malloc(nsel * sizeof(int));
+  ws.ccomp = malloc(nsel * sizeof(int));
+  ws.cwt = malloc(nsel * sizeof(double));
+  ws.pbase = malloc((nsel + 1) * sizeof(size_t));
+  ws.pset = malloc(np * sizeof(size_t));
+  ws.ptheta = malloc(np * sizeof(int));
+  ws.pdphi = malloc(np * sizeof(int));
+  ws.prfac = potsynth_aligned_calloc(np * L1 * sizeof(double));
+
+  if (ws.rpow && ws.ccomp && ws.cwt && ws.pbase && ws.pset && ws.ptheta && ws.pdphi && ws.prfac)
+    {
+      for (c = 0, k = 0; c < nsel; ++c)
+        {
+          ws.rpow[c] = w->rpow[sel[c]];
+          ws.ccomp[c] = w->ccomp[sel[c]];
+          ws.cwt[c] = w->cwt[sel[c]];
+          ws.pbase[c] = k;
+
+          for (p = w->pbase[sel[c]]; p < w->pbase[sel[c] + 1]; ++p, ++k)
+            {
+              ws.pset[k] = w->pset[p];
+              ws.ptheta[k] = w->ptheta[p];
+              ws.pdphi[k] = w->pdphi[p];
+              memcpy(ws.prfac + k * L1, w->prfac + p * L1, L1 * sizeof(double));
+            }
+        }
+      ws.pbase[nsel] = k;
+
+      status = potsynth_direct_init(&ws);
+      if (status == POTSYNTH_SUCCESS)
+        {
+          ew = potsynth_eval_alloc(0, &ws);
+          status = (ew != NULL) ? potsynth_eval(n, r, th, ph, out, ew) : POTSYNTH_ENOMEM;
+        }
     }
 
-  /* components */
-  for (c = 0; c < nchan; ++c)
-    {
-      const int fam = op_family(w->theta_op[c], w->dphi[c]);
-      size_t c2;
-      grp[c] = -1;
-      gwt[c] = (fam == 2 && w->theta_op[c] == POTSYNTH_THETA_S2B) ? 2.0 : 1.0;
-      for (c2 = 0; c2 < c && fam >= 0; ++c2)
-        if (w->rpow[c2] == w->rpow[c] && op_family(w->theta_op[c2], w->dphi[c2]) == fam)
-          {
-            grp[c] = grp[c2];
-            break;
-          }
-      if (grp[c] < 0)
-        grp[c] = ngrp++;
-    }
+  if (ew)
+    potsynth_eval_free(ew);
 
-  {
-    int g;
-    for (g = 0; g < ngrp; ++g)
-      {
-        double emax = 0.0, vmax = 0.0;
-        for (i = 0; i < npt; ++i)
-          {
-            double e2 = 0.0, v2 = 0.0;
-            for (c = 0; c < nchan; ++c)
-              {
-                if (grp[c] != g)
-                  continue;
-                e2 += gwt[c] * gwt[c] * (of[c * npt + i] - od[c * npt + i]) * (of[c * npt + i] - od[c * npt + i]);
-                v2 += gwt[c] * gwt[c] * od[c * npt + i] * od[c * npt + i];
-              }
-            emax = fmax(emax, sqrt(e2));
-            vmax = fmax(vmax, sqrt(v2));
-          }
-        if (vmax > 0.0)
-          worst = fmax(worst, emax / vmax);
-      }
-  }
+  potsynth_direct_free(&ws);
+  free(ws.rpow);
+  free(ws.ccomp);
+  free(ws.cwt);
+  free(ws.pbase);
+  free(ws.pset);
+  free(ws.ptheta);
+  free(ws.pdphi);
+  if (ws.prfac)
+    potsynth_aligned_free(ws.prfac);
 
-done:
-  free(tops); free(topr); free(topc); free(b1); free(grp); free(gwt);
-  free(r); free(th); free(ph); free(of); free(od);
-  return worst;
+  return status;
 }

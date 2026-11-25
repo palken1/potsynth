@@ -3,8 +3,8 @@
  *
  * Fast synthesis of internal potential-field models at scattered points:
  * generic (field-agnostic) interface. Physical front-ends (potsynth_mag.h,
- * potsynth_grav.h) translate their quantities into the channels
- * defined here.
+ * potsynth_grav.h, potsynth_vsh.h) translate their quantities into the
+ * channels defined here.
  *
  * Each channel c is the quantity
  *
@@ -15,6 +15,11 @@
  * where Pbar_l^m are 4-pi fully normalized associated Legendre functions
  * (no Condon-Shortley phase), T_c an operator in theta and D_c = (d/dphi)^dphi_c.
  * Constant factors (a, GM/a, ...) are folded into rfac.
+ *
+ * A model may also hold several coefficient sets, with outputs that are sums
+ * of such terms of different sets (potsynth_alloc_sets()), and take its radial
+ * dependence from radial functions of the caller in place of the powers of
+ * a/r (potsynth_radial): fields that are not gradients of one potential.
  *
  * Copyright (C) 2026 Patrick Alken and Johnathan Burchill, BSD 3-Clause License
  */
@@ -95,6 +100,56 @@ typedef struct
   int dphi;             /* number of phi derivatives: 0 or 1 */
 } potsynth_channel;
 
+/* one term of an output of a model with several coefficient sets (potsynth_alloc_sets()):
+   fac * rfac[l] * T[Pbar_l^m] D[C_lm cos(m phi) + S_lm sin(m phi)] with the coefficients of one set */
+typedef struct
+{
+  size_t set;           /* coefficient set, 0..nset-1 */
+  double fac;           /* constant factor */
+  const double * rfac;  /* per-degree factors rfac[l], l = 0..lmax, or NULL for 1; copied at allocation */
+  int theta;            /* operator in theta (POTSYNTH_THETA_xxx) */
+  int dphi;             /* number of phi derivatives: 0 or 1 */
+} potsynth_term;
+
+/* one output of such a model: (a/r)^(l + rpow) times the sum of its terms */
+typedef struct
+{
+  int rpow;                     /* radial power offset of all terms (not used with radial functions
+                                   of the caller) */
+  size_t nterm;                 /* number of terms */
+  const potsynth_term * term;   /* terms, length nterm; copied at allocation */
+  int component;                /* field component for the accuracy: outputs with the same value > 0
+                                   form one component, and eps is relative to the largest magnitude
+                                   of each component; 0: chosen by the library (outputs with the same
+                                   radial power, kind of operators and coefficient sets) */
+  double weight;                /* weight of the output in the magnitude of its component; 0: chosen
+                                   by the library (1, and 2 for POTSYNTH_THETA_S2B outputs) */
+} potsynth_output;
+
+/*
+ * Radial functions of the caller, in place of the powers of a/r: on output
+ * f[0..*n-1] = f_first(r), ..., f_{first+n-1}(r), the functions that are nonzero
+ * at r (all others are zero), *n <= number of functions; if df is not NULL, also
+ * their derivatives (reserved for radial derivatives; not used at present).
+ * Returns POTSYNTH_SUCCESS, or POTSYNTH_EDOM if r is outside of the range of the
+ * functions. Must be safe to call from several threads.
+ */
+typedef int potsynth_radial_fn(const double r, size_t * first, size_t * n,
+                               double * f, double * df, void * params);
+
+/*
+ * A radial basis of the caller for potsynth_alloc_sets(): each output is
+ * \sum_j f_j(r) x (sum of its terms with the coefficient sets set + j), i.e. the
+ * set of a term is the first of n consecutive sets, one for each radial function
+ */
+typedef struct
+{
+  size_t n;                     /* number of radial functions */
+  potsynth_radial_fn * f;       /* the functions; NULL with n = 1: no radial dependence
+                                   (a field on the sphere; r is then not used and may be NULL) */
+  void * params;                /* passed to f; must remain valid while the model is used */
+} potsynth_radial;
+
 typedef struct
 {
   double eps;           /* requested accuracy relative to max of each quantity, default 1e-10 */
@@ -105,6 +160,10 @@ typedef struct
   int nthreads;         /* OpenMP threads; 0 = all available */
   size_t npts_hint;     /* expected number of evaluation points, used by METHOD_AUTO to
                            choose the faster method including set-up; 0 = unknown */
+  double theta_min;     /* smallest colatitude of the evaluation points (radians), default 0 */
+  double theta_max;     /* largest colatitude of the evaluation points (radians); 0 = pi (default).
+                           The fast method stores only the grid rows of this range, and points
+                           outside of it are a domain error; ignored by the direct method */
 } potsynth_parameters;
 
 typedef struct
@@ -113,7 +172,7 @@ typedef struct
   size_t lmax;          /* maximum SH degree */
   size_t mmax;          /* maximum SH order */
   size_t nchan;         /* number of channels */
-  size_t nout;          /* outputs per point written by potsynth_eval() (= nchan, or more with
+  size_t nout;         /* outputs per point written by potsynth_eval() (= nchan, or more with
                            a front-end output map, e.g. 6 tensor components from 5 channels) */
   int method;           /* method selected (POTSYNTH_METHOD_FAST or POTSYNTH_METHOD_DIRECT) */
   int w;                /* window width */
@@ -124,6 +183,7 @@ typedef struct
   size_t nf2;           /* fine grid size in phi */
   size_t nrows;         /* stored grid rows */
   size_t grid_bytes;    /* memory used by the grid */
+  size_t ncomp;         /* number of field components (the quantities eps is relative to) */
 } potsynth_info;
 
 /*
@@ -158,8 +218,19 @@ POTSYNTH_API potsynth_workspace * potsynth_alloc(const size_t lmin, const size_t
                                                  const double rmin, const double rmax,
                                                  const size_t nchan, const potsynth_channel * chan,
                                                  const potsynth_parameters * params);
+POTSYNTH_API potsynth_workspace * potsynth_alloc_sets(const size_t lmin, const size_t lmax, const size_t mmax,
+                                                      const size_t nset, const double * coef,
+                                                      const double a, const double rmin, const double rmax,
+                                                      const potsynth_radial * radial,
+                                                      const size_t nout, const potsynth_output * out,
+                                                      const potsynth_parameters * params);
 POTSYNTH_API void potsynth_free(potsynth_workspace * w);
 POTSYNTH_API int potsynth_get_info(potsynth_info * info, const potsynth_workspace * w);
+
+/* io.c: files of models of the fast method */
+POTSYNTH_API int potsynth_write(const char * filename, const potsynth_workspace * w);
+POTSYNTH_API potsynth_workspace * potsynth_read(const char * filename, const potsynth_radial * radial,
+                                                const int nthreads);
 
 /* frame.c */
 POTSYNTH_API void potsynth_tensor_rtp2nec(const size_t n, double * T);
@@ -173,6 +244,8 @@ POTSYNTH_API potsynth_eval_workspace * potsynth_eval_alloc(const size_t chunk, c
 POTSYNTH_API void potsynth_eval_free(potsynth_eval_workspace * ew);
 POTSYNTH_API int potsynth_eval(const size_t n, const double * r, const double * theta, const double * phi,
                                double * out, potsynth_eval_workspace * ew);
+POTSYNTH_API int potsynth_eval_rows(const size_t n, const double * r, const double * theta, const double * phi,
+                                    double * out, potsynth_eval_workspace * ew);
 
 #ifdef __cplusplus
 }

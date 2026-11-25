@@ -86,6 +86,16 @@ Linking
 When linking a static library built with OpenMP, also add the compiler's OpenMP flag
 (e.g. ``-fopenmp``).
 
+The installation includes a pkg-config file, ``potsynth.pc``, in ``<libdir>/pkgconfig``:
+
+.. code-block:: sh
+
+   cc -O2 myprog.c $(pkg-config --cflags --libs potsynth)
+
+Use ``pkg-config --static --libs potsynth`` for a static library; it adds the math
+library and the OpenMP flag. CMake chooses the library directory of the platform
+(``lib64`` on some Linux systems); pass ``-DCMAKE_INSTALL_LIBDIR=lib`` to change it.
+
 .. _python-install:
 
 Python interface
@@ -158,6 +168,25 @@ Tests
 
    ``test_eval.c``
       The fast method against the direct method, for many models and channel sets.
+
+   ``test_sets.c``
+      Models with several coefficient sets against sums of single-set models; the row
+      layout of the outputs against the standard one for all front-ends; components
+      given by the caller.
+
+   ``test_region.c``
+      A colatitude range of the points: the same values as the model of the whole
+      sphere, fewer grid rows, and points outside of the range refused.
+
+   ``test_vsh.c``
+      The vector spherical harmonic front-end: fields, divergence and curl against
+      single-set models and against numerical derivatives; radial functions of the
+      caller (``test_radialfn.c`` has those of the tests); models with hundreds of
+      fields of very different sizes.
+
+   ``test_io.c``
+      Model files: a model read from a file gives the same values as the one written,
+      and damaged or mismatched files are refused.
 
    ``test_api.c``
       The API contract: NaN inputs, domain errors, error codes, invalid arguments,

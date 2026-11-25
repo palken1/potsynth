@@ -93,26 +93,46 @@ struct potsynth_workspace
   double a;             /* reference radius */
   double rmin;          /* minimum radius of evaluation points (fast method) */
   double rmax;          /* maximum radius of evaluation points (fast method) */
+  double th_lo;         /* smallest colatitude of evaluation points (fast method) */
+  double th_hi;         /* largest colatitude of evaluation points (fast method) */
   size_t nchan;         /* number of channels */
   potsynth_parameters params;
   int method;           /* method selected (POTSYNTH_METHOD_FAST or _DIRECT) */
   int nthreads;         /* number of threads */
 
-  /* channels */
+  /* channels: channel c is the sum of its parts pbase[c] .. pbase[c+1]-1, each one
+   * theta and phi operator applied to one coefficient set (potsynth_alloc(): one
+   * part per channel, set 0) */
   int * rpow;           /* radial power offsets, length nchan */
-  int * theta_op;       /* theta operators, length nchan */
-  int * dphi;           /* phi derivatives, length nchan */
-  double * rfac;        /* per-degree factors, rfac[c*(lmax+1) + l] */
+  int * ccomp;          /* component label of each channel, > 0, or 0 (chosen here); length nchan */
+  double * cwt;         /* weight of each channel in its component, or 0 (chosen here); length nchan */
+  size_t ncomp;         /* number of field components (potsynth_quantities()) */
+  size_t npart;         /* number of parts */
+  size_t * pbase;       /* first part of each channel, length nchan+1 */
+  size_t * pset;        /* coefficient set of each part, length npart */
+  int * ptheta;         /* theta operator of each part, length npart */
+  int * pdphi;          /* phi derivatives of each part, length npart */
+  double * prfac;       /* per-degree factors of each part (with its constant factor),
+                           prfac[p*(lmax+1) + l] */
 
   /* outputs: linear combinations of the channels at each point (front-ends) */
   size_t nout;          /* outputs per point (= nchan without a map) */
   double * omap;        /* output k = sum_c omap[k*nchan + c] channel c, or NULL (outputs = channels) */
 
-  /* coefficients, 4-pi normalized, M-major: C[idx(l,m)], S[idx(l,m)] */
+  /* coefficients of each set, 4-pi normalized, M-major: C[set*nalf + idx(l,m)],
+   * S[set*nalf + idx(l,m)] */
+  size_t nset;          /* number of coefficient sets */
+  size_t nalf;          /* coefficients per set, (lmax+1)(lmax+2)/2 */
   double * C;
   double * S;
 
   potsynth_alf_workspace * alf_workspace_p;
+
+  /* radial functions of the caller (potsynth_radial), in place of the powers of a/r:
+   * part p then has the coefficient set pset[p] + i for radial function i */
+  size_t nrad;          /* number of radial functions of the caller, or 0: powers of a/r */
+  potsynth_radial_fn * rfn; /* the functions, or NULL: one function, 1 for all r */
+  void * rfn_params;    /* parameters of rfn */
 
   /* fast method */
   int w;                /* window width */
@@ -174,6 +194,7 @@ struct potsynth_eval_workspace
 
   double * tscratch;    /* per-thread scratch space, nthreads * tstride */
   size_t tstride;       /* doubles of scratch per thread */
+  double * rscratch;    /* radial functions of the caller at a point (validation), length nrad, or NULL */
 };
 
 /* exponential of semicircle window phi(z) = exp(beta (sqrt(1 - z^2) - 1)) */
@@ -189,6 +210,33 @@ static inline size_t
 potsynth_alf_idx(const size_t l, const size_t m, const size_t lmax)
 {
   return ((m * (2 * lmax + 1 - m)) >> 1) + l;
+}
+
+/*
+ * grid layer of channel c and radial function i of rho. Powers of a/r: the
+ * radial functions of a channel are next to each other. Radial functions of the
+ * caller: the channels of a radial function are next to each other, so that the
+ * window sum of a point covers only the layers of the functions that are
+ * nonzero there
+ */
+static inline size_t
+potsynth_layer(const potsynth_workspace * w, const size_t c, const size_t i, const size_t rho)
+{
+  return (w->nrad > 0) ? i * w->nchan + c : c * rho + i;
+}
+
+/* number of coefficient sets of a part: one for each radial function of the caller */
+static inline size_t
+potsynth_nsetr(const potsynth_workspace * w)
+{
+  return (w->nrad > 0) ? w->nrad : 1;
+}
+
+/* coefficient set of part p for radial function i */
+static inline size_t
+potsynth_part_set(const potsynth_workspace * w, const size_t p, const size_t i)
+{
+  return w->pset[p] + ((w->nrad > 0) ? i : 0);
 }
 
 /*
@@ -221,7 +269,11 @@ void potsynth_error(const char * reason, const char * file, int line, int potsyn
 int potsynth_fast_init(potsynth_workspace * w);
 double potsynth_fast_check(potsynth_workspace * w);
 double potsynth_op_msq(const int op, const int dphi, const size_t l, const size_t m);
-void potsynth_radial_weights(const potsynth_workspace * w, const int normalize, double * wn);
+int potsynth_op_family(const int op, const int dphi);
+int potsynth_chan_family(const potsynth_workspace * w, const size_t c);
+double potsynth_chan_weight(const potsynth_workspace * w, const size_t c);
+size_t potsynth_quantities(const potsynth_workspace * w, size_t * grp);
+int potsynth_radial_weights(const potsynth_workspace * w, const int normalize, double * wn);
 double potsynth_radial_tol(const potsynth_parameters * params);
 
 /* radial.c */
@@ -229,10 +281,21 @@ potsynth_radial_workspace * potsynth_radial_alloc(const double u0, const double 
                                                   const size_t lmin, const size_t lmax,
                                                   const size_t nchan, const int * rpow,
                                                   const double * wn, const double tol);
+potsynth_radial_workspace * potsynth_radial_alloc_caller(const size_t nrad, const size_t lmax,
+                                                         const size_t nchan);
 void potsynth_radial_free(potsynth_radial_workspace * w);
 int potsynth_svd_jacobi(const size_t n, const size_t p, double * X, double * V, double * sv);
 
 /* setup.c */
+potsynth_workspace * potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
+                                         const size_t nset, const double * const * sets,
+                                         const double a, const double rmin, const double rmax,
+                                         const potsynth_radial * radial,
+                                         const size_t nout, const potsynth_output * out,
+                                         const potsynth_parameters * params);
+size_t potsynth_term_factors(const potsynth_workspace * w, const size_t p, const size_t sub,
+                             const size_t m, const double * beta, double * f);
+int potsynth_radial_eval(const potsynth_workspace * w, const double r, size_t * first, size_t * n, double * f);
 int potsynth_set_outputs(potsynth_workspace * w, const size_t nout, const double * map);
 void potsynth_tensor_channels(const size_t lmax, const double f, potsynth_channel * chan, double * rfac);
 void potsynth_tensor_map(const size_t nchan, const size_t c0, double * map);

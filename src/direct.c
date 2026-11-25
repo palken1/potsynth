@@ -59,11 +59,17 @@ potsynth_direct_init(potsynth_workspace * w)
   const size_t L = w->lmax;
   const size_t L1 = L + 1;
   const size_t nchan = w->nchan;
-  size_t m, l, c, k, total = 0;
+  /* radial functions of the caller: each (channel, radial function) is summed on
+     its own, with the coefficient sets of the function, and the functions are
+     applied at the points; otherwise one sum per channel */
+  const size_t nsetr = potsynth_nsetr(w);
+  size_t m, l, c, k, p, i, total = 0;
 
+  /* terms: channel-major, then the parts of the channel, the terms of the operator
+     and the radial functions */
   w->nterm = 0;
-  for (c = 0; c < nchan; ++c)
-    w->nterm += potsynth_op_nterm(w->theta_op[c]);
+  for (p = 0; p < w->npart; ++p)
+    w->nterm += potsynth_op_nterm(w->ptheta[p]) * nsetr;
 
   w->doff = malloc(L1 * sizeof(size_t));
   w->tcol = malloc(w->nterm * sizeof(int));
@@ -79,12 +85,18 @@ potsynth_direct_init(potsynth_workspace * w)
     {
       size_t sub;
 
-      for (sub = 0; sub < potsynth_op_nterm(w->theta_op[c]); ++sub, ++k)
+      for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
         {
-          potsynth_op_term(w->theta_op[c], sub, &(w->tcol[k]), &(w->tpost[k]));
-          w->tchan[k] = c;
-          if (w->tcol[k] == POTSYNTH_COL_G)
-            w->needG = 1;
+          for (sub = 0; sub < potsynth_op_nterm(w->ptheta[p]); ++sub)
+            {
+              for (i = 0; i < nsetr; ++i, ++k)
+                {
+                  potsynth_op_term(w->ptheta[p], sub, &(w->tcol[k]), &(w->tpost[k]));
+                  w->tchan[k] = c * nsetr + i;
+                  if (w->tcol[k] == POTSYNTH_COL_G)
+                    w->needG = 1;
+                }
+            }
         }
     }
 
@@ -106,36 +118,36 @@ potsynth_direct_init(potsynth_workspace * w)
       const size_t nn = L - m + 1;
       const double dm = (double) m;
 
-      for (c = 0, k = 0; c < nchan; ++c)
+      for (p = 0, k = 0; p < w->npart; ++p)
         {
-          const int op = w->theta_op[c];
-          const double * rfac = w->rfac + c * L1;
           size_t sub;
 
-          for (sub = 0; sub < potsynth_op_nterm(op); ++sub, ++k)
+          for (sub = 0; sub < potsynth_op_nterm(w->ptheta[p]); ++sub)
             {
-              double * wa = w->dW + w->doff[m] + 2 * k * nn;
-              double * wb = wa + nn;
-              size_t lstart = (w->lmin > m) ? w->lmin : m;
-
-              /* P/sin and S2B are not defined for m = 0 */
-              if ((op == POTSYNTH_THETA_PSIN || op == POTSYNTH_THETA_S2B) && m == 0)
-                lstart = L + 1;
-
-              for (l = lstart; l <= L; ++l)
+              for (i = 0; i < nsetr; ++i, ++k)
                 {
-                  const size_t idx = potsynth_alf_idx(l, m, L);
-                  const double f = rfac[l] * potsynth_op_factor(op, sub, l, m);
+                  const double * C = w->C + potsynth_part_set(w, p, i) * w->nalf;
+                  const double * S = w->S + potsynth_part_set(w, p, i) * w->nalf;
+                  double * wa = w->dW + w->doff[m] + 2 * k * nn;
+                  double * wb = wa + nn;
+                  /* factors per degree in wa, then the coefficients */
+                  const size_t lstart = potsynth_term_factors(w, p, sub, m, NULL, wa);
 
-                  if (w->dphi[c] == 0)
+                  for (l = lstart; l <= L; ++l)
                     {
-                      wa[l - m] = f * w->C[idx];
-                      wb[l - m] = f * w->S[idx];
-                    }
-                  else
-                    {
-                      wa[l - m] = f * dm * w->S[idx];
-                      wb[l - m] = -f * dm * w->C[idx];
+                      const size_t idx = potsynth_alf_idx(l, m, L);
+                      const double f = wa[l - m];
+
+                      if (w->pdphi[p] == 0)
+                        {
+                          wa[l - m] = f * C[idx];
+                          wb[l - m] = f * S[idx];
+                        }
+                      else
+                        {
+                          wa[l - m] = f * dm * S[idx];
+                          wb[l - m] = -f * dm * C[idx];
+                        }
                     }
                 }
             }
@@ -168,7 +180,7 @@ potsynth_direct_free(potsynth_workspace * w)
 size_t
 potsynth_direct_scratch_size(const potsynth_workspace * w)
 {
-  return (2 * w->nterm + w->nchan) * POTSYNTH_NB;
+  return (2 * w->nterm + w->nchan * potsynth_nsetr(w)) * POTSYNTH_NB + w->nrad;
 }
 
 #ifdef POTSYNTH_HAVE_VECEXT
@@ -310,7 +322,8 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
   const size_t nterm = w->nterm;
   const potsynth_alf_workspace * alf = w->alf_workspace_p;
   double * restrict acc = scratch;                       /* 2*nterm*NB */
-  double * restrict res = acc + 2 * nterm * POTSYNTH_NB; /* nchan*NB */
+  const size_t nsetr = potsynth_nsetr(w);
+  double * restrict res = acc + 2 * nterm * POTSYNTH_NB; /* nchan*nsetr*NB */
   double x[POTSYNTH_NB], s[POTSYNTH_NB], s2[POTSYNTH_NB], u[POTSYNTH_NB], um[POTSYNTH_NB];
   double ph[POTSYNTH_NB], e0[POTSYNTH_NB];
   double c1[POTSYNTH_NB], s1[POTSYNTH_NB], cm[POTSYNTH_NB], sm[POTSYNTH_NB];
@@ -329,7 +342,7 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
       x[j] = cos(theta[jj]);
       s[j] = sin(theta[jj]);
       s2[j] = s[j] * s[j];
-      u[j] = w->a / r[jj];
+      u[j] = (w->nrad > 0) ? 1.0 : w->a / r[jj]; /* radial functions of the caller: no powers of a/r */
       um[j] = 1.0;
       ph[j] = p;
       c1[j] = cos(p);
@@ -342,7 +355,7 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
       pep[j] = 0;
     }
 
-  memset(res, 0, nchan * POTSYNTH_NB * sizeof(double));
+  memset(res, 0, nchan * nsetr * POTSYNTH_NB * sizeof(double));
 
   for (m = 0; m <= w->mmax; ++m)
     {
@@ -491,6 +504,31 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
               rr[j] += v;
             }
         }
+    }
+
+  if (w->nrad > 0)
+    {
+      /* radial functions of the caller at each point (validated before) */
+      double * f = res + nchan * nsetr * POTSYNTH_NB;
+
+      for (j = 0; j < nb; ++j)
+        {
+          size_t first, cnt, i;
+
+          potsynth_radial_eval(w, r[j], &first, &cnt, f);
+
+          for (c = 0; c < nchan; ++c)
+            {
+              double sum = 0.0;
+
+              for (i = 0; i < cnt; ++i)
+                sum += f[i] * res[(c * nsetr + first + i) * POTSYNTH_NB + j];
+
+              out[c * ldo + j] = sum;
+            }
+        }
+
+      return;
     }
 
   for (c = 0; c < nchan; ++c)

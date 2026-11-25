@@ -166,3 +166,70 @@ Output:
    fast vs direct (1000 points), g_phi  : max difference 9.53e-14 (6.8e-12 relative)
 
    map of g_r at 250 km: shape (181, 360), range [-908722.6, -904571.6] mGal
+
+Vector fields
+=============
+
+Twenty vector fields of degree 60 that are not gradients of a potential, given by their
+vector spherical harmonic coefficients at four radii and interpolated linearly in
+between by a radial function of the caller. The points lie on a polar cap, so the grid
+is stored for that cap only, and the result is written as the rows of a design matrix.
+
+C
+-
+
+``examples/example_vsh.c`` (built as ``example_vsh``):
+
+.. literalinclude:: ../examples/example_vsh.c
+   :language: c
+   :start-at: typedef struct
+   :end-before: static double
+
+.. code-block:: c
+
+   nodes_t nodes = { 4, rnode };
+   potsynth_radial radial = { 4, radial_linear, &nodes };
+   potsynth_parameters params = potsynth_default_parameters();
+
+   params.eps = 1.0e-8;
+   params.theta_max = 50.0 * M_PI / 180.0;
+
+   /* a, b, c: nexp * 4 * nlm coefficients each, field e at node j at (e*4 + j)*nlm */
+   w = potsynth_vsh_alloc(1, lmax, lmax, nexp, a, b, c, POTSYNTH_VSH_NORM_SCHMIDT, POTSYNTH_VSH_V,
+                          rnode[0], rnode[3], &radial, &params);
+   ew = potsynth_eval_alloc(0, w);
+
+   /* (V_r, V_theta, V_phi) of field e at point i in G[(i*nexp + e)*3 + 0..2] */
+   status = potsynth_eval_rows(npts, r, theta, phi, G, ew);
+
+Output::
+
+   20 fields of degree 60 with 4 radial functions: 60 outputs, 40 components
+   method fast, window width 9, grid 22.3 MB (46 rows of 125)
+
+Python
+------
+
+.. code-block:: python
+
+   import numpy as np
+   import potsynth
+
+   nodes = np.array([6671.2, 6871.2, 7071.2, 7221.2])
+
+   def hats(r):                         # linear interpolation between the nodes
+       if not nodes[0] <= r <= nodes[-1]:
+           return None
+       k = min(np.searchsorted(nodes, r, side="right") - 1, len(nodes) - 2)
+       t = (r - nodes[k]) / (nodes[k + 1] - nodes[k])
+       return k, (1.0 - t, t)
+
+   radial = potsynth.Radial(len(nodes), hats, rmin=nodes[0], rmax=nodes[-1])
+   model = potsynth.VshModel(a, b, c, radial=radial,          # arrays (20, 4, nlm)
+                             eps=1e-8, theta_max=np.radians(50.0))
+
+   V = model(r, theta, phi)             # (20, 3, npoints): V_r, V_theta, V_phi of each field
+   G = model.rows(r, theta, phi)        # (npoints, 60): rows of a design matrix
+
+A radial function written in Python is called for every point and is slow; see
+:py:class:`Radial` for compiled ones.

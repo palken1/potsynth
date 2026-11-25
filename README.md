@@ -2,7 +2,8 @@
 
 Fast synthesis of internal potential-field models at large numbers of scattered points.
 Geomagnetic models (IGRF, CHAOS, lithospheric models) and gravity field models (EGM2008,
-EIGEN, XGM and others in the ICGEM `.gfc` format) are supported.
+EIGEN, XGM and others in the ICGEM `.gfc` format) are supported, and vector fields given
+by vector spherical harmonic coefficients, which need not be gradients of a potential.
 
 After a one-off set-up, the cost per point does not depend on the maximum degree L.
 With 10^6 points, eps = 1e-10 and 16 threads on an Intel Core Ultra 7 265H, compared
@@ -48,7 +49,10 @@ Documentation: `doc/` (Sphinx). Build it with `make -C doc html`, then open
   scaling. This supports degrees up to `POTSYNTH_LMAX` = 2800.
 - The results are correct at every point on the sphere, including both poles.
   P/sin(theta) and dP/dtheta are never formed by dividing by sin(theta).
-- A generic core evaluates linear functionals ("channels") of an internal potential.
+- A generic core evaluates linear functionals ("channels") of an internal potential. A
+  model may hold several coefficient sets, with outputs that combine them, and all
+  outputs share one grid; the radial dependence is the powers of a/r or radial functions
+  supplied by the caller (fields known at a number of radii, splines, ...).
   Front-ends map physical quantities onto channels:
   - `potsynth_mag`: B = -grad V and its gradient tensor grad B from Schmidt-normalized
     Gauss coefficients
@@ -58,6 +62,11 @@ Documentation: `doc/` (Sphinx). Build it with `make -C doc html`, then open
     coordinates, normal field, normal gravity) and the "Gravity recipes" chapter of the
     documentation show how to get disturbances, anomalies, height anomalies,
     deflections and geoid heights from the synthesis.
+  - `potsynth_vsh`: any number of vector fields sum_j f_j(r) [a Y r + b Psi + c Phi],
+    with their surface divergence and curl
+- For large problems: the outputs of a point next to each other (rows of a design
+  matrix), a colatitude range of the points that shrinks the grid, and model files that
+  are read instead of repeating the set-up.
 - The model workspace is read-only after set-up and can be shared between threads.
   Evaluation does not allocate memory.
 - Coefficients are passed degree by degree, with orders -M..M within each degree (see
@@ -147,7 +156,9 @@ portable build of the library, and selects one at import time.
 internal components against independent references (long double, brute force, analytic
 identities), the Legendre functions against GSL (if found), the magnetic field against
 extended-precision reference data including both poles, fast versus direct for many
-models, the API contract, and concurrent evaluation from 8 threads. Like GSL's tests it
+models, models with several coefficient sets, the colatitude range, vector fields with
+radial functions of the caller, model files, the API contract, and concurrent
+evaluation from 8 threads. Like GSL's tests it
 prints only failures; set `POTSYNTH_TEST_VERBOSE=1` to see every check.
 
 `tests/check.sh` builds and tests every configuration: release, shared, generic scalar
@@ -155,7 +166,7 @@ kernels, ASan+UBSan, and TSan.
 
 ## Layout
 
-    include/     public headers (potsynth.h core, potsynth_mag.h, potsynth_grav.h)
+    include/     public headers (potsynth.h core, potsynth_mag.h, potsynth_grav.h, potsynth_vsh.h)
     src/         implementation
     extern/      vendored third-party code (pocketfft)
     tests/       tests, long-double reference data (tests/data), benchmark

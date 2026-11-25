@@ -49,6 +49,38 @@ for :eq:`grav_potential`: :math:`V` is the channel :math:`(GM/a)\, u^{l+1} \bar{
 and :math:`\mathbf{g} = \nabla V` has the three channels above with factors
 :math:`-(GM/a^2)(l+1)` and :math:`GM/a^2`, without the minus signs.
 
+Nothing in the method requires the quantities to come from one potential. A model may
+hold several coefficient sets, and a quantity may be a sum of terms of the form
+:eq:`channel` with different sets, as long as the terms belong to one field component
+(a scalar, a horizontal vector, or a horizontal tensor). The horizontal components of
+a vector spherical harmonic expansion
+:math:`\sum_{lm} b_{lm}\boldsymbol\Psi_{lm} + c_{lm}\boldsymbol\Phi_{lm}`, for example,
+are
+
+.. math::
+
+   V_\theta &= \sum \frac{d\bar{P}_l^m}{d\theta}\, [b] \;-\;
+               \sum \frac{\bar{P}_l^m}{\sin\theta}\, \frac{\partial}{\partial\phi}[c], \\
+   V_\phi &= \sum \frac{\bar{P}_l^m}{\sin\theta}\, \frac{\partial}{\partial\phi}[b] \;+\;
+             \sum \frac{d\bar{P}_l^m}{d\theta}\, [c],
+
+where :math:`[b]` and :math:`[c]` stand for the brackets of :eq:`channel` with the
+coefficients of each set. The steps below apply unchanged: each term is accumulated
+with the coefficients of its own set, the reflection of each term under
+:math:`\theta \to \pi - \theta` follows its own operator (step 2), and the weights that
+control the accuracy of a component are summed over its sets. All quantities of all
+sets share one grid, so one window sum gives them all.
+
+The radial dependence need not be a power of :math:`a/r` either. Step 1 below writes
+each quantity as :math:`\sum_i b_i(u)\, G_i(\theta,\phi)` with radial functions found
+by an SVD; a model may instead take the radial functions from the caller
+(:ref:`radial-functions`), with one coefficient set for each function. Steps 2 to 5
+are then applied to the :math:`G_i` as they are, and step 1 is skipped. In the grid of
+such a model the quantities of one radial function are stored next to each other, so
+that the window sum of a point covers only the functions that are nonzero at its
+radius. The vector spherical harmonic front-end (:ref:`vsh-frontend`) is built on both
+extensions.
+
 Overview of the fast method
 ===========================
 
@@ -185,6 +217,15 @@ The spin-1 pair is the surface gradient :math:`\mathbf{\Psi}`; the spin-2 pair i
 trace-free horizontal part of the Hessian, :math:`\mathcal{B}` counting twice because
 :math:`T_{\theta\phi}` appears twice in the tensor. Any other channel (for example
 :math:`\partial_\phi \bar{P}` alone) is a quantity of its own.
+
+In a model with several coefficient sets, channels form a quantity only if they also
+use the same sets: the horizontal components of one vector field are a quantity, those
+of two fields are two. The caller may also name the quantities, by giving each output a
+component label and a weight (the :math:`\gamma_c` below); this is how a tensor built
+from two coefficient sets is declared. In the weights that follow, the power
+:math:`\|C_l\|^2` of a quantity is then summed over the sets of its terms, and, with
+radial functions of the caller, over the sets of all radial functions.
+:c:member:`potsynth_info.ncomp` is the number of quantities of a model.
 
 **Mean squares.** For one 4-:math:`\pi` normalized harmonic
 :math:`\bar{P}_l^m(\cos\theta)\cos m\phi`, the mean square over the sphere of each
@@ -463,12 +504,22 @@ Points have :math:`\theta \in [0,\pi]`, and a window reaches :math:`w/2` grid st
 either side. So only the rows :math:`-w/2 - 1 \lesssim \nu \lesssim \pi/h_1 + w/2 + 1`
 are stored, about half the doubled-sphere grid plus a margin.
 
+If the points are known to lie in a colatitude range
+:math:`[\theta_{min}, \theta_{max}]` (the parameters ``theta_min``, ``theta_max``), only
+the rows :math:`\theta_{min}/h_1 - w/2 - 1 \lesssim \nu \lesssim \theta_{max}/h_1 + w/2 + 1`
+are stored. The stored rows hold the same values as in the grid of the whole sphere, so
+the results are identical, and the memory shrinks roughly in proportion to the range.
+This matters for data in a region: a polar cap of :math:`50^\circ` needs about a third
+of the rows, a regional survey a few percent. The set-up time is unchanged, because the
+Fourier series in :math:`\theta` are still computed for the whole circle.
+
 - **Rows below 0 and above** :math:`\pi`: these hold values from the mirror half of the
   doubled sphere. They serve points near a pole, whose windows straddle it. Because the
   angular functions are smooth across the poles, the window sum is as accurate there as
   anywhere else, so the poles need no special treatment.
-- **Padding columns:** the grid has :math:`w/2 + 1` periodically repeated columns on
-  each side, so a window never wraps around in longitude.
+- **Padding columns:** the grid has :math:`w/2 + 1` periodically repeated columns before
+  :math:`\phi = 0` and :math:`w + 1` after :math:`\phi = 2\pi`, so a window never wraps
+  around in longitude.
 - **Channel layout:** all :math:`n_{ch} = \rho \times` (number of channels) values of a
   grid node are stored next to each other, padded to a multiple of 4. One row of a
   point's window is then a single contiguous block of :math:`w\, n_{ch}` values.
@@ -491,9 +542,21 @@ For a point :math:`(r,\theta,\phi)`:
 
    This is the main cost, :math:`n_{ch} w^2` multiply-adds. The kernel processes 8
    channels at a time with 4 independent partial sums each, all in vector registers,
-   which hides the latency of the fused multiply-add.
+   which hides the latency of the fused multiply-add. A model with 1024 or more grid
+   channels (many fields on one grid) is summed node after node instead: the channels
+   of a node are then read from start to end, which is what limits the speed when they
+   no longer fit in the cache.
 3. **Radial values** :math:`b_i(a/r)`, from their Chebyshev series.
 4. **Combination:** :math:`f_c = \sum_i b_i\, s_{c,i}`.
+
+With radial functions of the caller (:ref:`radial-functions`), step 3 comes first: the
+caller's function returns the functions that are nonzero at :math:`r`, and the window
+sum of step 2 covers only their grid channels, which are stored next to each other. The
+cost per point is then :math:`n_c w^2` times the number of functions that are nonzero
+at a radius, whatever the number of radial functions of the model.
+
+The outputs are written output by output (:c:func:`potsynth_eval`) or point by point
+(:c:func:`potsynth_eval_rows`).
 
 Points are processed in chunks. Within a chunk they are counting-sorted by grid block,
 so consecutive points read neighbouring memory, and blocks of points are distributed
@@ -815,7 +878,14 @@ largest: for each channel, the 16 grid nodes with the largest five-point Laplaci
 bottom of the shell, and around each the four cell midpoints (where the error of a
 band-edge mode peaks), at the bottom, middle and top of the shell, plus 256 points
 uniform in the shell for the sizes of the quantities. If any quantity's error there
-exceeds :math:`\varepsilon`, :math:`w` is raised by one and the grid rebuilt. In every
+exceeds :math:`\varepsilon`, :math:`w` is raised by one and the grid rebuilt; the radial
+basis does not depend on :math:`w` and is kept.
+
+A model with more than 64 quantities (many fields on one grid) is checked for the 64
+quantities with the largest share of their power in the highest eighth of the degrees,
+where the window error is largest, with 2 nodes per channel. The direct sum is computed
+for the channels of the checked quantities only, so the cost of the check does not grow
+with the number of fields. In every
 case tested (LCS-1 and EGM2008, satellite shells and the topographic surface,
 :math:`10^{-3}` to :math:`10^{-13}`), the check found errors of :math:`0.09` to
 :math:`0.89\varepsilon` and never widened the window. It is made only when the width is
@@ -860,14 +930,20 @@ Cost and memory
 
 - The window check (see :ref:`accuracy`) scans the grid once and evaluates the direct
   sum at a few thousand points: :math:`O(L^2 (n_{ch}\rho + n_{\rm pts}))`.
+- A model with radial functions of the caller has no radial step; its
+  :math:`n_{ch}` is the number of quantities times the number of radial functions.
 
 In practice set-up takes about 0.07 s at :math:`L = 185` and about 1 s at :math:`L = 720`
 on 16 threads.
 
 **Memory.** The grid holds :math:`n_{rows} \times n_{cols} \times n_{ch}` doubles, with
 :math:`n_{rows} \approx n_f/2 + w`, :math:`n_{cols} \approx n_f + 1.5w` and
-:math:`n_f \approx \sigma(2L+1)`. That is roughly :math:`8\sigma^2 L^2\, n_{ch}` bytes:
+:math:`n_f \approx \sigma(2L+1)`. That is roughly :math:`16\sigma^2 L^2\, n_{ch}` bytes:
 64 MB at :math:`L = 185` and :math:`\varepsilon = 10^{-10}`, 0.9 GB at :math:`L = 720`.
+With a colatitude range of the points (step 4), :math:`n_{rows}` is the number of rows of
+the range plus :math:`w`. During the set-up the model also holds a copy of its
+coefficients, which is freed when the grid is built. A model that has been set up can be
+written to a file and read on later runs (:c:func:`potsynth_write`).
 
 **Evaluation per point.**
 
@@ -878,6 +954,15 @@ on 16 threads.
 None of these depend on :math:`L`. At :math:`\varepsilon = 10^{-10}`
 (:math:`w = 11`, :math:`n_{ch} = 27`) this is about 3300 multiply-adds, or 0.5 µs per
 point on one core.
+
+For thousands of grid channels the window of a point no longer fits in the cache
+(:math:`8 n_{ch} w^2` bytes: 9 MB for :math:`n_{ch} = 8000`, :math:`w = 12`), and the time
+is set by reading it from memory, not by the arithmetic. One measured case, 331 vector
+fields of degree 150 with 8 radial functions each (:math:`n_{ch} = 7944`) on a polar cap
+of :math:`50^\circ`: 26 s set-up, a grid of 4.0 GB, and 0.33 ms per point at
+:math:`\varepsilon = 10^{-10}` (0.16 ms at :math:`10^{-6}`), about 1 µs per point and
+field, on 2 threads of an Intel Core Ultra 7 265H. A second thread gains little here; several
+threads are better spent on separate sets of points.
 
 **Direct method:** :math:`O(L^2)` per point. It is faster than the fast method up to
 :math:`L \approx 20\text{--}30`, depending on the accuracy and the number of threads.

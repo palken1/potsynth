@@ -27,7 +27,7 @@ evaluated. To build and load the library, see :ref:`installation <python-install
 Magnetic models
 ===============
 
-.. py:class:: MagModel(gh, lmax=None, lmin=1, mmax=None, a=6371.2, rmin=0.0, rmax=0.0, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0, quantities="B")
+.. py:class:: MagModel(gh, lmax=None, lmin=1, mmax=None, a=6371.2, rmin=0.0, rmax=0.0, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0, quantities="B", theta_min=0.0, theta_max=0.0)
 
    An internal magnetic field model :math:`\mathbf{B} = -\nabla V`, where :math:`V` is
    given by Schmidt semi-normalized Gauss coefficients (:eq:`mag_potential`), and
@@ -60,6 +60,9 @@ Magnetic models
    :param quantities: ``"B"`` (the field, nT) and/or ``"gradB"`` (the gradient tensor
       :math:`\nabla\mathbf{B} = -\nabla\nabla V`, nT/km), as a list or a
       comma-separated string
+   :param float theta_min: smallest colatitude (radians) at which the model will be
+      evaluated; see :ref:`python-regions`
+   :param float theta_max: largest colatitude (radians); 0 means :math:`\pi`
 
    The set-up is done in the constructor. Choose :math:`[r_{\min}, r_{\max}]` as
    tight as the data allow.
@@ -118,7 +121,7 @@ Magnetic models
 Gravity models
 ==============
 
-.. py:class:: GravModel(coef, GM, a, lmax=None, lmin=0, mmax=None, quantities="V,g", rmin=0.0, rmax=0.0, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0)
+.. py:class:: GravModel(coef, GM, a, lmax=None, lmin=0, mmax=None, quantities="V,g", rmin=0.0, rmax=0.0, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0, theta_min=0.0, theta_max=0.0)
 
    A gravity field model: the gravitational potential :eq:`grav_potential` and the
    acceleration :math:`\mathbf{g} = \nabla V`. Only the synthesis is computed: no
@@ -275,7 +278,7 @@ Generic models
    :param rfac: per-degree factors :math:`\rho(l)`, length :math:`L+1`, or ``None``
       for 1
 
-.. py:class:: Model(coef, lmin, lmax, channels, a, rmin=0.0, rmax=0.0, mmax=None, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0)
+.. py:class:: Model(coef, lmin, lmax, channels, a, rmin=0.0, rmax=0.0, mmax=None, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0, theta_min=0.0, theta_max=0.0)
 
    A model with user-defined channels. ``coef`` holds the 4-:math:`\pi` fully
    normalized coefficients as a vector (see :py:func:`coef_vector`), and ``lmin``
@@ -293,6 +296,169 @@ Generic models
                potsynth.Channel(rpow=2, rfac=l + 1.0)]          # -dV/dr
       model = potsynth.Model(coef, 0, L, chans, a, rmin, rmax)
       V, dV = model(r, theta, phi)
+
+Vector fields
+=============
+
+.. py:class:: VshModel(a=None, b=None, c=None, lmax=None, lmin=1, mmax=None, norm="schmidt", quantities="V", radial=None, rmin=None, rmax=None, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0, theta_min=0.0, theta_max=0.0)
+
+   Vector fields given by vector spherical harmonic coefficients, which need not be
+   gradients of a potential (see :ref:`vsh-frontend` for the definition of the fields
+   and of :math:`\boldsymbol\Psi_{lm}`, :math:`\boldsymbol\Phi_{lm}`). A model holds
+   any number of fields, which share one grid of the fast method.
+
+   :param a: coefficients of :math:`Y_{lm}\hat{\mathbf r}`, ``None`` (zero) or an array
+      of shape ``(nexp, nrad, nlm)``: ``nexp`` fields, ``nrad`` radial functions, and
+      ``nlm = nlm(lmin, lmax, mmax)`` coefficients in the layout of :py:func:`idx`.
+      ``(nexp, nlm)`` is accepted for ``nrad = 1`` and ``(nlm,)`` for one field
+   :param b: coefficients of :math:`\boldsymbol\Psi_{lm}`, as ``a``
+   :param c: coefficients of :math:`\boldsymbol\Phi_{lm}`, as ``a``
+   :param str norm: ``"schmidt"`` or ``"full"`` normalization of the coefficients
+   :param quantities: any of ``"V"`` (:math:`V_r, V_\theta, V_\phi`), ``"V_r"``,
+      ``"V_h"`` (:math:`V_\theta, V_\phi`), ``"div"`` and ``"curl"`` (surface divergence
+      and radial component of the surface curl of the tangential part on the unit
+      sphere; divide by :math:`r`), as a list or a comma-separated string
+   :param radial: radial functions (a :py:class:`Radial`), or ``None`` for fields on
+      the sphere
+   :param rmin, rmax: radius range of the points; by default that of ``radial``
+   :param float eps: accuracy relative to the largest magnitude of each component of
+      each field (:math:`V_r`; the horizontal vector; the divergence; the curl)
+
+   The other arguments are as for :py:class:`MagModel`.
+
+   Calling the model with ``(r, theta, phi)`` returns an array of shape
+   ``(nexp, nout) + shape``, with the outputs of each field in the order
+   :math:`V_r, V_\theta, V_\phi`, divergence, curl; :py:attr:`outputs` names them. For
+   fields on the sphere ``r`` is not used and may be ``None``.
+
+   .. py:attribute:: outputs
+
+      Names of the outputs of each field.
+
+   .. py:attribute:: nexp
+
+      Number of fields.
+
+   Example: 300 fields given at 8 Chebyshev radii, as a design matrix:
+
+   .. code-block:: python
+
+      radial = potsynth.Radial(8, weights, rmin=rlo, rmax=rhi)   # the caller's 8 functions
+      model = potsynth.VshModel(a, b, c, radial=radial,     # arrays (300, 8, nlm)
+                                theta_max=np.radians(50.0)) # points on a polar cap
+      G = model.rows(r, theta, phi)                         # (npoints, 900)
+
+Radial functions
+----------------
+
+By default the radial dependence of a model is the power of :math:`a/r` of each
+degree. A :py:class:`VshModel` takes its radial functions from the caller (see
+:ref:`radial-functions`).
+
+.. py:class:: Radial(n, func, params=None, rmin=None, rmax=None)
+
+   ``n`` radial functions :math:`f_j(r)`: a model that uses them has ``n`` coefficient
+   sets for each field.
+
+   :param func: the functions, as a Python function or a compiled function (below)
+   :param params: for a compiled function, what it receives as ``params``: ``None``, an
+      integer address, a ctypes pointer or structure, or a NumPy array (its data)
+   :param rmin, rmax: range of radii in which the functions are defined; the default
+      radius range of a model that uses them
+
+   **A Python function** ``func(r)`` returns ``(first, values)``: the values of the
+   functions ``first, first + 1, ...`` that are nonzero at the radius ``r``; all others
+   are zero. It returns ``None`` if ``r`` is outside the range of the functions. An
+   exception it raises is raised by the evaluation.
+
+   .. code-block:: python
+
+      def hats(r):                                   # linear interpolation between nodes
+          if not nodes[0] <= r <= nodes[-1]:
+              return None
+          k = min(np.searchsorted(nodes, r, side="right") - 1, len(nodes) - 2)
+          t = (r - nodes[k]) / (nodes[k + 1] - nodes[k])
+          return k, (1.0 - t, t)
+
+      radial = potsynth.Radial(len(nodes), hats, rmin=nodes[0], rmax=nodes[-1])
+      model = potsynth.VshModel(a, b, c, radial=radial)       # arrays (nexp, len(nodes), nlm)
+
+   A Python function is called for every evaluation point, one call at a time whatever
+   the number of threads, and costs 10 to 20 microseconds per point, against well
+   under a microsecond for the rest of the evaluation. It is suited to trying a scheme
+   out and to thousands of points.
+
+   **A compiled function** has the C signature of :c:type:`potsynth_radial_fn` and runs
+   at the speed of C, from several threads at once. It is given as a ctypes function
+   pointer, as an object with an ``address`` attribute, or as an integer address. With
+   numba the Python function above becomes a compiled one:
+
+   .. code-block:: python
+
+      from numba import cfunc, types, carray
+
+      sig = types.intc(types.double, types.CPointer(types.uintp), types.CPointer(types.uintp),
+                       types.CPointer(types.double), types.CPointer(types.double), types.voidptr)
+      x = tuple(nodes)
+
+      @cfunc(sig)
+      def hats(r, first, n, f, df, params):
+          if not (r >= x[0] and r <= x[-1]):
+              return 3                               # POTSYNTH_EDOM
+          k = 0
+          while k + 2 < len(x) and r >= x[k + 1]:
+              k += 1
+          t = (r - x[k]) / (x[k + 1] - x[k])
+          out = carray(f, 2)
+          out[0] = 1.0 - t
+          out[1] = t
+          first[0] = k
+          n[0] = 2
+          return 0
+
+      radial = potsynth.Radial(len(nodes), hats, rmin=nodes[0], rmax=nodes[-1])
+
+   A function in a C or Cython extension is passed in the same way, by its address,
+   with its node positions or other data as ``params``.
+
+.. _python-regions:
+
+Rows, regions and model files
+=============================
+
+These apply to every model (:py:class:`MagModel`, :py:class:`GravModel`,
+:py:class:`Model`, :py:class:`VshModel`).
+
+.. py:method:: Model.rows(r, theta, phi)
+
+   Evaluates the model with the outputs of a point next to each other: an array of
+   shape ``shape + (nout,)``. With the outputs as the basis functions of a fit, these
+   are the rows of its design matrix. The values are those of calling the model. For
+   models with many outputs this is also the faster layout.
+
+**Colatitude range.** The arguments ``theta_min`` and ``theta_max`` (radians;
+``theta_max = 0`` means :math:`\pi`) give the colatitude range of the evaluation
+points. The fast method then stores only the part of its grid that the range needs,
+with the same values, and a point outside the range raises
+:py:class:`DomainError`. Use it for data on a polar cap or in a region.
+
+.. py:method:: Model.write(filename)
+
+   Writes a model of the fast method to a file, so that it can be read instead of
+   being set up again. The file is about as large as the grid
+   (``info["grid_bytes"]``), is in the binary format of the machine, and does not hold
+   the coefficients.
+
+.. py:function:: read(filename, radial=None, nthreads=0)
+
+   Reads a model and returns a :py:class:`LoadedModel`. ``radial`` must be the radial
+   functions of a model that was set up with them.
+
+.. py:class:: LoadedModel
+
+   A model read from a file. Calling it with ``(r, theta, phi)`` gives an array of shape
+   ``(nout,) + shape`` with the outputs in the order of the model that was written;
+   :py:meth:`Model.rows` and ``info`` are available.
 
 Coefficients
 ============
