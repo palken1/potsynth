@@ -385,6 +385,15 @@ window_origin(const double theta, const double phi, long * l1, long * l2, const 
 #define EVAL_R(r, i)                 (((r) != NULL) ? (r)[i] : 1.0)
 
 /* validate all points before any output is written */
+/* 1 if the points of a model with radial functions of the caller are checked against
+ * [rmin, rmax] (given), 0 if against the functions themselves; a model with no radial
+ * dependence (rfn NULL) needs neither */
+static int
+radial_range(const potsynth_workspace * w)
+{
+  return w->rfn == NULL || (w->rmin > 0.0 && w->rmin <= w->rmax && isfinite(w->rmax));
+}
+
 /* check one point; scratch: nrad doubles for the radial functions of the caller;
  * lnmax: largest log((a/r)^(lmax+p)) the direct sum can form without overflow */
 static int
@@ -410,11 +419,25 @@ validate_point(const double ri, const double ti, const double pf, double * scrat
 
   if (w->nrad > 0)
     {
-      /* range of the radial functions of the caller */
-      size_t first, cnt;
+      /* range of the radial functions of the caller: [rmin, rmax] of the model, which
+       * must lie in their range (so they are called once per point, in the evaluation);
+       * without a range (direct method), the functions themselves. No radial dependence
+       * (rfn NULL): nothing to check, r may be absent */
+      if (w->rfn == NULL)
+        return POTSYNTH_SUCCESS;
 
-      if (potsynth_radial_eval(w, ri, &first, &cnt, scratch) != POTSYNTH_SUCCESS)
-        return POTSYNTH_EDOM;
+      if (radial_range(w))
+        {
+          if (!(ri >= w->rmin * (1.0 - 1.0e-10) && ri <= w->rmax * (1.0 + 1.0e-10)))
+            return POTSYNTH_EDOM;
+        }
+      else
+        {
+          size_t first, cnt;
+
+          if (potsynth_radial_eval(w, ri, &first, &cnt, scratch) != POTSYNTH_SUCCESS)
+            return POTSYNTH_EDOM;
+        }
     }
   else if (w->method == POTSYNTH_METHOD_FAST)
     {
@@ -459,7 +482,7 @@ validate(const size_t n, const double * r, const double * theta, const double * 
         lnmax = 700.0 / (double) (w->lmax + (size_t) maxpow);
     }
 
-  if (w->nrad > 0 || n < POTSYNTH_PAR_MIN || ew->nthreads <= 1)
+  if ((w->nrad > 0 && !radial_range(w)) || n < POTSYNTH_PAR_MIN || ew->nthreads <= 1)
     {
       for (i = 0; i < (long) n; ++i)
         {

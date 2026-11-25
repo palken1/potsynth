@@ -76,6 +76,12 @@ First public release.
   operator are combined before their power is taken, so that sets that nearly cancel
   (e.g. the difference of two epochs) get the radial basis and window of their sum, not
   of each set.
+- Window check of a model with more than 16 functionals: 16 candidate nodes per
+  irreducible component (was as few as 2 per functional), each component checked against
+  the direct sum of its own functionals at its own points.
+- Radial functions of the caller are called once per point: validation checks the radius
+  against [rmin, rmax] of the model, where the functions must be valid (they were called
+  in validation and again in the evaluation).
 - Robustness: the free functions accept NULL, as `free()` does; colatitudes up to 1e-6 rad
   outside [0, pi] are accepted (pi in single precision), with the smooth continuation of
   the field across the pole; the direct method refuses a point where (a/r)^lmax would overflow

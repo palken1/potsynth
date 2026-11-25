@@ -1350,8 +1350,10 @@ functionals form, with the weights of the functionals (potsynth_func_weight()).
 4) A model with more than CHECK_MAXCOMP components (many fields on one grid) is
 checked for the CHECK_MAXCOMP components with the largest share of their power
 in the highest eighth of the degrees, where the window error is largest. A model
-with more than CHECK_BUDGET / CHECK_TOP functionals to check gets fewer candidate
-nodes per functional (at least CHECK_TOP_MANY). The direct sum is computed for the functionals of
+with more than CHECK_BUDGET / CHECK_TOP functionals to check takes CHECK_TOP candidate
+nodes per irreducible component instead of per functional, ranked by the weighted
+root sum of squares of the Laplacians of its functionals; the direct sum of a
+component is computed at its own candidate points and the random points only. The direct sum is computed for the functionals of
 the checked components only, so that the cost of the check does not grow with
 the number of fields.
 */
@@ -1359,10 +1361,125 @@ the number of fields.
 #define CHECK_TOP      16   /* candidate nodes per functional */
 #define CHECK_NRAND    256  /* random points */
 #define CHECK_MAXCOMP  64   /* components checked of a model with more components */
-#define CHECK_TOP_MANY 2    /* least candidate nodes per functional */
-#define CHECK_BUDGET   256  /* candidate nodes of all functionals, unless that leaves fewer than
-                               CHECK_TOP_MANY per functional */
+#define CHECK_BUDGET   256  /* candidate nodes of all functionals; with more functionals the
+                               candidates are taken per component (CHECK_TOP each) */
 #define CHECK_CHUNK    256  /* points per evaluation of the fast method */
+
+/* offer a candidate node to a list of ctop entries whose smallest entry is at *jmin;
+ * the list is searched only when it changes (the first smallest, as a search before
+ * each candidate would find) */
+static void
+check_offer(const double lap, const long row, const long col, const size_t ctop, double * tops,
+            long * topr, long * topc, size_t * jmin)
+{
+  size_t q;
+
+  if (!(lap > tops[*jmin]))
+    return;
+
+  tops[*jmin] = lap;
+  topr[*jmin] = row;
+  topc[*jmin] = col;
+
+  *jmin = 0;
+  for (q = 1; q < ctop; ++q)
+    if (tops[q] < tops[*jmin])
+      *jmin = q;
+}
+
+/*
+check_many()
+  Errors of the components of a model with many checked functionals: each component
+against the direct sum of its own functionals at its own candidate points and the
+random points (pown = -1)
+
+Inputs: of - fast values of the checked functionals, of[ck*npt + i]
+        worst  - (input/output) largest relative error
+        failed - (output) error code if a direct sum failed
+
+Return: 1 on success, 0 on failure
+*/
+
+static int
+check_many(potsynth_workspace * w, const size_t * grp, const size_t nsel, const size_t * sel,
+           const size_t * cg, const size_t ncg, const size_t npt, const double * r, const double * th,
+           const double * ph, const long * pown, const double * of, double * worst, int * failed)
+{
+  size_t * idx = malloc(npt * sizeof(size_t));
+  size_t * fs = malloc(nsel * sizeof(size_t));   /* functionals of the component */
+  size_t * fk = malloc(nsel * sizeof(size_t));   /* their positions in sel */
+  double * rr = malloc(npt * sizeof(double));
+  double * tt = malloc(npt * sizeof(double));
+  double * pp = malloc(npt * sizeof(double));
+  double * od = malloc(nsel * npt * sizeof(double));
+  int ok = (idx && fs && fk && rr && tt && pp && od);
+  size_t kg;
+
+  (void) grp;
+  if (!ok)
+    *failed = POTSYNTH_ENOMEM;
+
+  for (kg = 0; ok && kg < ncg; ++kg)
+    {
+      size_t n = 0, nf = 0, i, j;
+      double emax = 0.0, vmax = 0.0;
+      int st;
+
+      for (j = 0; j < nsel; ++j)
+        {
+          if (cg[j] == kg)
+            {
+              fk[nf] = j;
+              fs[nf++] = sel[j];
+            }
+        }
+
+      for (i = 0; i < npt; ++i)
+        {
+          if (pown[i] < 0 || (size_t) pown[i] == kg)
+            {
+              idx[n] = i;
+              rr[n] = r[i];
+              tt[n] = th[i];
+              pp[n] = ph[i];
+              ++n;
+            }
+        }
+
+      st = check_direct(w, nf, fs, n, rr, tt, pp, od);
+      if (st != POTSYNTH_SUCCESS)
+        {
+          *failed = st;
+          ok = 0;
+          break;
+        }
+
+      for (i = 0; i < n; ++i)
+        {
+          double e2 = 0.0, v2 = 0.0;
+
+          for (j = 0; j < nf; ++j)
+            {
+              const double wt = potsynth_func_weight(w, fs[j]);
+              const double dv = od[j * n + i];
+              const double d = of[fk[j] * npt + idx[i]] - dv;
+
+              e2 += wt * wt * d * d;
+              v2 += wt * wt * dv * dv;
+            }
+
+          emax = fmax(emax, sqrt(e2));
+          vmax = fmax(vmax, sqrt(v2));
+        }
+
+      if (vmax > 0.0)
+        *worst = fmax(*worst, emax / vmax);
+    }
+
+  free(idx); free(fs); free(fk); free(rr); free(tt); free(pp); free(od);
+
+  return ok;
+}
 
 double
 potsynth_fast_check(potsynth_workspace * w)
@@ -1384,6 +1501,10 @@ potsynth_fast_check(potsynth_workspace * w)
   long * topr = NULL, * topc = NULL;
   double * omap = w->omap;
   size_t ngrp = 0, nsel = 0, ctop = CHECK_TOP, ntop = 0, npt = 0, i, c, k;
+  size_t * cg = NULL;   /* many: compact component number of each checked functional */
+  size_t ncg = 0, nlist = 0;
+  long * pown = NULL;   /* many: list (component) whose candidate a point is, -1: random */
+  int many = 0;
   double worst = 0.0;
   int ok = (grp != NULL && sel != NULL && b1 != NULL);
   int failed = ok ? POTSYNTH_SUCCESS : POTSYNTH_ENOMEM;
@@ -1396,18 +1517,44 @@ potsynth_fast_check(potsynth_workspace * w)
       ngrp = potsynth_components(w, grp);
       nsel = check_select(w, grp, ngrp, sel);
       ok = (nsel > 0);
-      /* candidates per functional: CHECK_TOP, fewer when there are many functionals, so that
-         the number of check points (and the cost of their direct sum) stays bounded */
-      ctop = CHECK_BUDGET / nsel;
-      ctop = (ctop > CHECK_TOP) ? CHECK_TOP : ((ctop < CHECK_TOP_MANY) ? CHECK_TOP_MANY : ctop);
-      ntop = nsel * ctop;
+      /* candidates: CHECK_TOP per functional; with many functionals CHECK_TOP per
+         component, so that the number of check points stays bounded without fewer
+         candidates for each component */
+      many = (nsel > CHECK_BUDGET / CHECK_TOP);
+      nlist = nsel;
+      if (ok && many)
+        {
+          cg = malloc(nsel * sizeof(size_t));
+          ok = (cg != NULL);
+          if (!ok)
+            failed = POTSYNTH_ENOMEM;
+          for (c = 0; ok && c < nsel; ++c)
+            {
+              size_t c2;
+
+              cg[c] = ncg;
+              for (c2 = 0; c2 < c; ++c2)
+                {
+                  if (grp[sel[c2]] == grp[sel[c]])
+                    {
+                      cg[c] = cg[c2];
+                      break;
+                    }
+                }
+              if (cg[c] == ncg)
+                ++ncg;
+            }
+          nlist = ncg;
+        }
+      ntop = nlist * ctop;
     }
 
   if (ok)
     {
       npt = ntop * 12 + CHECK_NRAND;
       tops = calloc(ntop * (size_t) nth, sizeof(double));
-      tmin = calloc(nsel * (size_t) nth, sizeof(size_t));
+      tmin = calloc(nlist * (size_t) nth, sizeof(size_t));
+      pown = malloc(npt * sizeof(long));
       topr = calloc(ntop * (size_t) nth, sizeof(long));
       topc = calloc(ntop * (size_t) nth, sizeof(long));
       r = malloc(npt * sizeof(double));
@@ -1417,7 +1564,7 @@ potsynth_fast_check(potsynth_workspace * w)
       od = malloc(nsel * npt * sizeof(double));
       buf = malloc(nfunc * CHECK_CHUNK * sizeof(double));
       acc = calloc(4 * ngrp, sizeof(double));
-      ok = (tops && tmin && topr && topc && r && th && ph && of && od && buf && acc);
+      ok = (tops && tmin && pown && topr && topc && r && th && ph && of && od && buf && acc);
       if (!ok)
         failed = POTSYNTH_ENOMEM;
     }
@@ -1446,6 +1593,7 @@ potsynth_fast_check(potsynth_workspace * w)
 #endif
         const size_t nrc = w->nf2 + 2;              /* columns -1 .. nf2 */
         double * ring = malloc(3 * nrc * nsel * sizeof(double));
+        double * lsq = many ? calloc(ncg, sizeof(double)) : NULL; /* per component, many */
         long have = LONG_MIN;                       /* centre row of the sums in the ring */
 
 #pragma omp for private(row) schedule(static)
@@ -1513,31 +1661,43 @@ potsynth_fast_check(potsynth_workspace * w)
 
                     lap = fabs(v[1] + v[2] + v[3] + v[4] - 4.0 * v[0]);
 
-                    /* the smallest entry is kept, so the list is searched only when it changes
-                     * (the first smallest, as a search before each candidate would find) */
-                    if (lap > tops[slot + *jmin])
+                    if (many)
                       {
-                        tops[slot + *jmin] = lap;
-                        topr[slot + *jmin] = row;
-                        topc[slot + *jmin] = col;
+                        /* weighted sum of squares over the functionals of the component */
+                        const double wt = potsynth_func_weight(w, cc);
+                        if (lsq != NULL)
+                          lsq[cg[ck]] += wt * wt * lap * lap;
+                        continue;
+                      }
 
-                        *jmin = 0;
-                        for (q = 1; q < ctop; ++q)
-                          if (tops[slot + q] < tops[slot + *jmin])
-                            *jmin = q;
+                    check_offer(lap, row, col, ctop, tops + slot, topr + slot, topc + slot, jmin);
+                  }
+
+                if (many && lsq != NULL)
+                  {
+                    size_t kg;
+
+                    for (kg = 0; kg < ncg; ++kg)
+                      {
+                        const size_t slot = base + kg * ctop;
+
+                        check_offer(sqrt(lsq[kg]), row, col, ctop, tops + slot, topr + slot, topc + slot,
+                                    tmin + base / ctop + kg);
+                        lsq[kg] = 0.0;
                       }
                   }
               }
           }
 
         free(ring);
+        free(lsq);
       }
 
       /* merge the threads' lists into the first */
       for (th0 = 1; th0 < nth; ++th0)
         {
           const size_t base = (size_t) th0 * ntop;
-          for (c = 0; c < nsel; ++c)
+          for (c = 0; c < nlist; ++c)
             {
               size_t q, q2;
               for (q = 0; q < ctop; ++q)
@@ -1578,6 +1738,7 @@ potsynth_fast_check(potsynth_workspace * w)
                     r[n] = rad[q];
                     th[n] = tt;
                     ph[n] = pp;
+                    pown[n] = many ? (long) (t / ctop) : -1;
                     ++n;
                   }
               }
@@ -1596,6 +1757,7 @@ potsynth_fast_check(potsynth_workspace * w)
                     fmin(fmax(acos(cos(w->th_lo) - x[1] * (cos(w->th_lo) - cos(w->th_hi))), w->th_lo), w->th_hi) :
                     acos(1.0 - 2.0 * x[1]);
             ph[n] = 2.0 * M_PI * x[2];
+            pown[n] = -1;
             ++n;
           }
         npt = n;
@@ -1632,8 +1794,15 @@ potsynth_fast_check(potsynth_workspace * w)
       }
     }
 
+  /* many functionals: each component against the direct sum of its own functionals at
+   * its own candidate points and the random points */
+  if (ok && many)
+    {
+      ok = check_many(w, grp, nsel, sel, cg, ncg, npt, r, th, ph, pown, of, &worst, &failed);
+    }
+
   /* direct sum of the checked functionals */
-  if (ok)
+  if (ok && !many)
     {
       const int st = check_direct(w, nsel, sel, npt, r, th, ph, od);
 
@@ -1643,7 +1812,7 @@ potsynth_fast_check(potsynth_workspace * w)
     }
 
   /* components: largest error and largest value of each over the points */
-  if (ok)
+  if (ok && !many)
     {
       double * e2 = acc, * v2 = acc + ngrp, * emax = acc + 2 * ngrp, * vmax = acc + 3 * ngrp;
       size_t g;
@@ -1677,7 +1846,7 @@ potsynth_fast_check(potsynth_workspace * w)
         }
     }
 
-  free(grp); free(sel); free(b1); free(tops); free(tmin); free(topr); free(topc);
+  free(grp); free(sel); free(b1); free(tops); free(tmin); free(topr); free(topc); free(cg); free(pown);
   free(r); free(th); free(ph); free(of); free(od); free(buf); free(acc);
 
   return failed ? -(double) failed : worst;

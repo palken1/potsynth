@@ -126,6 +126,52 @@ test_robust(void)
     potsynth_free(wdir);
   }
 
+  /* many functionals (8 vector fields: 24 functionals, 16 components): the window check
+   * takes its candidates per component; the check passes and fast agrees with direct */
+  {
+    const size_t Lv = 40, nexp = 8, n = 2000;
+    double * av = test_sets_coef(nexp, 1, Lv, Lv), * bv = test_sets_coef(nexp, 1, Lv, Lv);
+    double * cv = test_sets_coef(nexp, 1, Lv, Lv);
+    double * rv = malloc(n * sizeof(double)), * tv = malloc(n * sizeof(double)), * pv = malloc(n * sizeof(double));
+    double * of = malloc(3 * nexp * n * sizeof(double)), * od = malloc(3 * nexp * n * sizeof(double));
+    potsynth_workspace * wf, * wdv;
+
+    params.eps = 1e-8;
+    wf = potsynth_vsh_alloc(1, Lv, Lv, nexp, av, bv, cv, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_V, rmin, rmax,
+                            NULL, &params);
+    params.method = POTSYNTH_METHOD_DIRECT;
+    wdv = potsynth_vsh_alloc(1, Lv, Lv, nexp, av, bv, cv, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_V, rmin, rmax,
+                             NULL, &params);
+    params.method = POTSYNTH_METHOD_FAST;
+    ps_test(wf == NULL || wdv == NULL, "robust: model with 24 functionals");
+    if (wf && wdv)
+      {
+        potsynth_eval_workspace * ef = potsynth_eval_alloc(0, wf), * ed = potsynth_eval_alloc(0, wdv);
+        double big = 0.0, err = 0.0;
+        size_t i;
+
+        potsynth_get_info(&info, wf);
+        ps_test(info.nfunc != 24, "robust: 24 functionals (%zu)", info.nfunc);
+        ps_test(!(info.err_check > 0.0 && info.err_check <= params.eps), "robust: many functionals, err_check %g",
+                info.err_check);
+        test_random_points(n, rmin, rmax, rv, tv, pv);
+        ps_test_int(potsynth_eval(n, rv, tv, pv, of, ef), POTSYNTH_SUCCESS, "robust: many functionals, fast");
+        ps_test_int(potsynth_eval(n, rv, tv, pv, od, ed), POTSYNTH_SUCCESS, "robust: many functionals, direct");
+        for (i = 0; i < 3 * nexp * n; ++i)
+          {
+            big = fmax(big, fabs(od[i]));
+            err = fmax(err, fabs(of[i] - od[i]));
+          }
+        ps_test(!(err <= 10.0 * params.eps * big), "robust: many functionals, fast against direct (%.1e)",
+                err / big);
+        potsynth_eval_free(ef);
+        potsynth_eval_free(ed);
+      }
+    potsynth_free(wf);
+    potsynth_free(wdv);
+    free(av); free(bv); free(cv); free(rv); free(tv); free(pv); free(of); free(od);
+  }
+
   /* direct method: a point so far inside a that (a/r)^lmax overflows is refused
    * (it gave NaN); one where it does not is evaluated */
   {
@@ -283,8 +329,9 @@ test_robust(void)
 
         ew = potsynth_eval_alloc(0, w);
 
-        /* validation calls the functions once per point; fail on the second pass */
-        fail.calls = (long) n + 5;
+        /* the functions are called once per point, in the evaluation (validation checks
+         * the radius against [rmin, rmax]); fail after 5 points */
+        fail.calls = 5;
         test_last_error();
         ps_test_int(potsynth_eval(n, r, th, ph, out, ew), POTSYNTH_EDOM,
                     "robust: %s radial function failing after validation", desc);

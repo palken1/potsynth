@@ -434,14 +434,18 @@ def test_vsh():
         except ValueError:
             pass
 
-    # an exception in a Python radial function is raised by the evaluation
+    # an exception in a Python radial function is raised by the evaluation (armed after the
+    # set-up, whose window check evaluates the functions all over the shell)
+    armed = [False]
+
     def broken(r):
-        if r > 6850.0:
+        if armed[0] and r > 6850.0:
             raise ZeroDivisionError("radial function failed")
         return bary(r)
 
-    rad = potsynth.Radial(4, broken, rmin=nodes[0], rmax=6840.0)
+    rad = potsynth.Radial(4, broken, rmin=nodes[0], rmax=nodes[-1])
     mb = potsynth.VshModel(A["bary"], None, None, quantities="V_r", radial=rad, method="fast")
+    armed[0] = True
     try:
         mb(np.full(3, 6860.0), th[:3], ph[:3])
         check(False, "exception of a radial function not raised")
@@ -450,13 +454,14 @@ def test_vsh():
     check(np.allclose(mb(rr[:5] * 0 + 6800.0, th[:5], ph[:5])[0, 0], p(6800.0) * v0[:5], rtol=1e-8),
           "model usable after an exception")
 
-    # an exception on the second pass over the points (after the library validated them)
-    # is raised by that call, not by a later one
+    # the functions are called once per point (validation checks the radius against
+    # [rmin, rmax]); an exception at the second point is raised by that call, not by a
+    # later one
     calls = [0]
 
     def late(r):
         calls[0] += 1
-        if calls[0] > 4:
+        if calls[0] > 1:
             raise ArithmeticError("radial function failed late")
         return bary(r)
 
@@ -472,6 +477,9 @@ def test_vsh():
     calls[0] = -10**9
     check(np.allclose(ml(rr[:5] * 0 + 6800.0, th[:5], ph[:5])[0, 0], p(6800.0) * v0[:5], rtol=1e-8),
           "no stale exception after a late failure")
+    calls[0] = -10**9
+    ml(np.full(7, 6800.0), th[:7], ph[:7])
+    check(calls[0] == -10**9 + 7, f"radial function called once per point ({calls[0] + 10**9} calls for 7 points)")
 
     # a compiled radial function (needs a C compiler; skipped without one)
     compiled = _compiled_radial(tempfile.gettempdir())

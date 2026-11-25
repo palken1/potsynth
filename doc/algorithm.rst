@@ -887,9 +887,12 @@ basis does not depend on :math:`w` and is kept.
 
 A model with more than 64 irreducible components (many fields on one grid) is checked for the 64
 irreducible components with the largest share of their power in the highest eighth of the degrees,
-where the window error is largest, with 2 nodes per functional. The direct sum is computed
-for the functionals of the checked irreducible components only, so the cost of the check does not grow
-with the number of fields. In every
+where the window error is largest. A model with more than 16 functionals to check takes
+its 16 candidate nodes per irreducible component instead of per functional, ranked by the
+weighted root sum of squares of the Laplacians of the component's functionals, and the
+direct sum of each component is computed for its own functionals at its own candidate
+points and the 256 random points only. So every checked component keeps 16 candidates,
+and the cost of the check does not grow with the number of fields. In every
 case tested (LCS-1 and EGM2008, satellite shells and the topographic surface,
 :math:`10^{-3}` to :math:`10^{-13}`), the check found errors of :math:`0.09` to
 :math:`0.89\varepsilon` and never widened the window. It is made only when the width is
