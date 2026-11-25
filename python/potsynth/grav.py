@@ -12,7 +12,7 @@ import numpy as np
 
 from . import _lib
 from ._lib import lib
-from .core import OPTIONS_DOC, _coefficients, _Evaluator, _options, _raise, nlm
+from .core import OPTIONS_DOC, _coefficients, _Evaluator, _options, _quantity_list, _raise, _range, nlm
 
 GRAV_V = 0x1
 GRAV_GR = 0x2
@@ -100,13 +100,15 @@ class GravModel(_Evaluator):
     Calling the model with (r [m], theta [rad, colatitude], phi [rad]) returns a named
     tuple with the requested quantities in the order V, g_r, g_theta, g_phi, T_rr, ...,
     T_pp, each with the broadcast shape of the inputs. g = grad V: g_r is negative (towards the center)
-    and g_theta is positive southwards.
+    and g_theta is positive southwards. model.outputs names the outputs, and
+    model.quantities holds the requested quantities.
     """
 
-    def __init__(self, coef, GM, a, lmax=None, lmin=0, mmax=None, quantities="V,g", rmin=0.0, rmax=0.0,
+    def __init__(self, coef, GM, a, lmax=None, lmin=0, mmax=None, quantities="V,g", rmin=None, rmax=None,
                  **options):
         flags, names = _flags(quantities)
         coef, lmax, mmax = _coefficients(coef, lmin, lmax, mmax)
+        rmin, rmax = _range(rmin, rmax)
         p, chunk = _options(options)
 
         _lib.clear_error()
@@ -115,11 +117,12 @@ class GravModel(_Evaluator):
         if not ptr:
             _raise(_lib.POTSYNTH_EINVAL, "potsynth_grav_alloc")
         super().__init__(ptr, len(names), chunk)
-        self.quantities = tuple(names)
+        self.outputs = tuple(names)
+        self.quantities = _quantity_list(quantities)
         self._result = collections.namedtuple("GravField", names)
 
     @classmethod
-    def from_gfc(cls, filename, lmax=0, quantities="V,g", rmin=0.0, rmax=0.0, **kwargs):
+    def from_gfc(cls, filename, lmax=0, quantities="V,g", rmin=None, rmax=None, **kwargs):
         """Build a model from an ICGEM .gfc file (see read_gfc()), with GM and the
         reference radius of the file; lmax truncates the model (0 = all degrees). The
         other arguments are as for GravModel."""

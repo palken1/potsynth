@@ -4,7 +4,9 @@
    that the first three agree):
    - `CMakeLists.txt`: `project(potsynth VERSION x.y.z ...)`
    - `include/potsynth.h`: `POTSYNTH_VERSION_MAJOR`, `_MINOR`, `_PATCH`
-   - `python/potsynth/__init__.py`: `__version__`
+   - `python/potsynth/_lib.py`: `VERSION` (also the package's `__version__`; the
+     package refuses a library of another version). If a public struct changed, also
+     raise `POTSYNTH_ABI` in `include/potsynth.h` and `ABI` in `_lib.py` together
    - `doc/conf.py`: `release`
    - `CITATION.cff`: `version`
 

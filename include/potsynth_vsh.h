@@ -58,9 +58,8 @@ POTSYNTH_API size_t potsynth_vsh_nout(const int quantities);
 POTSYNTH_API potsynth_workspace * potsynth_vsh_alloc(const size_t lmin, const size_t lmax, const size_t mmax,
                                                      const size_t nexp,
                                                      const double * a, const double * b, const double * c,
-                                                     const int norm, const int quantities,
-                                                     const double rmin, const double rmax,
-                                                     const potsynth_radial * radial,
+                                                     const int norm, const double rmin, const double rmax,
+                                                     const potsynth_radial * radial, const int quantities,
                                                      const potsynth_parameters * params);
 
 #ifdef __cplusplus

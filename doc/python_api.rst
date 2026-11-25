@@ -27,7 +27,7 @@ evaluated. To build and load the library, see :ref:`installation <python-install
 Magnetic models
 ===============
 
-.. py:class:: MagModel(gh, lmax=None, lmin=1, mmax=None, a=6371.2, rmin=0.0, rmax=0.0, quantities="B", **options)
+.. py:class:: MagModel(gh, lmax=None, lmin=1, mmax=None, a=6371.2, rmin=None, rmax=None, quantities="B", **options)
 
    An internal magnetic field model :math:`\mathbf{B} = -\nabla V`, where :math:`V` is
    given by Schmidt semi-normalized Gauss coefficients (:eq:`mag_potential`), and
@@ -38,12 +38,14 @@ Magnetic models
       - a tuple ``(g, h)`` of 2-D arrays indexed ``[l, m]``; or
       - a 1-D vector in the layout of :py:func:`idx` (``g`` at :math:`m \ge 0`, ``h``
         at :math:`m < 0`).
-   :param int lmax: maximum degree. By default it is taken from ``gh``.
+   :param int lmax: maximum degree. By default it is taken from ``gh``; a vector of
+      all degrees up to a higher degree is truncated.
    :param int lmin: minimum degree, :math:`\ge 1`
    :param int mmax: maximum order; default ``lmax``
    :param float a: reference radius in km
    :param float rmin: smallest radius (km) at which the model will be evaluated.
-      Required by the fast method; ignored by the direct method.
+      Required by the fast method; ignored by the direct method. Without it only the
+      direct method is available.
    :param float rmax: largest radius (km) at which the model will be evaluated, as for
       ``rmin``
    :param options: see :ref:`python-options`
@@ -70,9 +72,13 @@ Magnetic models
       coordinate give NaN outputs. :py:exc:`DomainError` is raised if a point lies
       outside the valid domain.
 
-   .. py:attribute:: quantities
+   .. py:attribute:: outputs
 
       The names of the outputs, for example ``("B_r", "B_theta", "B_phi")``.
+
+   .. py:attribute:: quantities
+
+      The requested quantities, for example ``("B", "gradB")``.
 
    .. py:attribute:: info
 
@@ -80,16 +86,18 @@ Magnetic models
       ``sigma``, ``rho``, ``ncheb``, ``nf1``, ``nf2``, ``nrows``, ``grid_bytes``,
       ``lmin``, ``lmax``, ``mmax``, ``nfunc`` and ``nout``.
 
-   .. py:classmethod:: from_shc(filename, a=6371.2, rmin=0.0, rmax=0.0, **kwargs)
+   .. py:classmethod:: from_shc(filename, lmax=0, a=6371.2, rmin=None, rmax=None, **kwargs)
 
-      Builds a model from a static Swarm SHC file (see :py:func:`read_shc`). The other
+      Builds a model from a static Swarm SHC file (see :py:func:`read_shc`), truncated
+      at degree ``lmax`` (0 for all degrees). The other
       arguments are as for :py:class:`MagModel`, for example
       ``MagModel.from_shc("LCS-1.shc", rmin=a + 250, rmax=a + 800)``.
 
-.. py:function:: read_shc(filename)
+.. py:function:: read_shc(filename, lmax=0)
 
    Reads a static model (one epoch, e.g. a lithospheric model such as LCS-1) from a
-   Swarm SHC file, using the C reader (see :c:func:`potsynth_shc_read`). Malformed
+   Swarm SHC file, using the C reader (see :c:func:`potsynth_shc_read`), truncated at
+   degree ``lmax`` (0 for all degrees). Malformed
    files raise :py:exc:`PotsynthError` with the line number. Time-dependent files are
    not supported.
 
@@ -108,7 +116,7 @@ Magnetic models
 Gravity models
 ==============
 
-.. py:class:: GravModel(coef, GM, a, lmax=None, lmin=0, mmax=None, quantities="V,g", rmin=0.0, rmax=0.0, **options)
+.. py:class:: GravModel(coef, GM, a, lmax=None, lmin=0, mmax=None, quantities="V,g", rmin=None, rmax=None, **options)
 
    A gravity field model: the gravitational potential :eq:`grav_potential` and the
    acceleration :math:`\mathbf{g} = \nabla V`. Only the synthesis is computed: no
@@ -151,16 +159,19 @@ Gravity models
          :math:`g_r` is negative (towards the centre) and :math:`g_\theta` is positive
          southwards.
 
+   .. py:attribute:: outputs
+
+      The names of the outputs, for example ``("V", "g_r", "g_theta", "g_phi")``.
+
    .. py:attribute:: quantities
 
-      The names of the output quantities, for example ``("V", "g_r", "g_theta",
-      "g_phi")``.
+      The requested quantities, for example ``("V", "g")``.
 
    .. py:attribute:: info
 
       As for :py:attr:`MagModel.info`.
 
-   .. py:classmethod:: from_gfc(filename, lmax=0, quantities="V,g", rmin=0.0, rmax=0.0, **kwargs)
+   .. py:classmethod:: from_gfc(filename, lmax=0, quantities="V,g", rmin=None, rmax=None, **kwargs)
 
       Builds a model from an ICGEM ``.gfc`` file (see :py:func:`read_gfc`), with the
       file's :math:`GM` and reference radius, truncated at degree ``lmax`` (0 for all
@@ -265,15 +276,17 @@ Generic models
    :param rfac: per-degree factors :math:`\rho(l)`, length :math:`L+1`, or ``None``
       for 1
 
-.. py:class:: Model(coef, lmin, lmax, functionals, a, rmin=0.0, rmax=0.0, mmax=None, **options)
+.. py:class:: Model(coef, lmin, lmax, functionals, a, rmin=None, rmax=None, mmax=None, names=None, **options)
 
    A model with user-defined functionals. ``coef`` holds the 4-:math:`\pi` fully
    normalized coefficients as a vector (see :py:func:`coef_vector`), and ``lmin``
    may be 0. ``a``, ``rmin`` and ``rmax`` are as for :py:class:`MagModel`, in the
-   unit of the radii; the options are described in :ref:`python-options`.
+   unit of the radii; the options are described in :ref:`python-options`. ``names``
+   names the functionals (by default ``"f0"``, ``"f1"``, ...).
 
    Calling the model with ``(r, theta, phi)`` returns an array of shape
-   ``(len(functionals),) + shape``. :py:attr:`MagModel.info` is also available.
+   ``(len(functionals),) + shape``. :py:attr:`MagModel.info` is also available, and
+   ``outputs`` holds the names.
 
    Example: a potential :math:`V/a` and its radial derivative:
 
@@ -285,7 +298,7 @@ Generic models
       model = potsynth.Model(coef, 0, L, funcs, a, rmin, rmax)
       V, dV = model(r, theta, phi)
 
-.. py:class:: SetsModel(coef, lmin, lmax, outputs, a=1.0, rmin=None, rmax=None, mmax=None, radial=None, **options)
+.. py:class:: SetsModel(coef, lmin, lmax, outputs, a=None, rmin=None, rmax=None, mmax=None, radial=None, names=None, **options)
 
    A model with several coefficient sets (see :c:func:`potsynth_alloc_sets`): each
    output is a sum of terms, and each term applies one operator to one set. All outputs
@@ -295,12 +308,15 @@ Generic models
    :param coef: array of shape ``(nset, nlm)``: the 4-:math:`\pi` fully normalized
       coefficients of each set in the layout of :py:func:`idx`
    :param outputs: list of :py:class:`Output`
+   :param a: reference radius, required unless radial functions are given
    :param radial: radial functions of the caller (:py:class:`Radial`) in place of the
       powers of :math:`a/r`, or ``None``. With radial functions a term's ``set`` is the
       first of ``radial.n`` consecutive sets, one for each function, and ``a`` and
       ``rpow`` are not used
    :param rmin, rmax: radius range of the points; with radial functions by default
       theirs
+   :param names: names of the outputs (by default ``"f0"``, ``"f1"``, ...), as
+      ``model.outputs``
 
    Calling the model returns an array of shape ``(len(outputs),) + shape``.
 
@@ -366,6 +382,10 @@ Vector fields
    .. py:attribute:: outputs
 
       Names of the outputs of each field.
+
+   .. py:attribute:: quantities
+
+      The requested quantities, for example ``("V", "div")``.
 
    .. py:attribute:: nexp
 
@@ -482,7 +502,8 @@ with the same values, and a point outside the range raises
    Writes a model of the fast method to a file, so that it can be read instead of
    being set up again. The file is about as large as the grid
    (``info["grid_bytes"]``), is in the binary format of the machine, and does not hold
-   the coefficients.
+   the coefficients. The names of the outputs and the requested quantities are
+   written next to it, to ``filename + ".json"``.
 
 .. py:function:: read(filename, radial=None, nthreads=0)
 
@@ -493,7 +514,11 @@ with the same values, and a point outside the range raises
 
    A model read from a file. Calling it with ``(r, theta, phi)`` gives an array of shape
    ``(nout,) + shape`` with the outputs in the order of the model that was written;
-   :py:meth:`Model.rows` and ``info`` are available.
+   :py:meth:`Model.rows` and ``info`` are available. From the file
+   ``filename + ".json"`` written with the model, ``outputs`` names the outputs,
+   ``quantities`` holds the requested quantities and ``model`` the class of the model
+   that was written; without that file ``outputs`` is ``("f0", "f1", ...)`` and the
+   others are ``None``.
 
 .. _python-options:
 
@@ -559,6 +584,12 @@ Exceptions
 Threads
 =======
 
-A model object holds one evaluation workspace, and calls on the same object are
-serialized by a lock. Each call already uses all the threads given by ``nthreads``.
-To evaluate from several Python threads at once, create one model object per thread.
+A model can be called from several Python threads at once: each thread gets its own
+evaluation workspace on its first call, and all of them share the one model (its grid
+is not copied). The C library releases the GIL while it evaluates. Each call uses the
+OpenMP threads given by ``nthreads`` at set-up; set ``model.eval_threads = 1`` (or
+another number) when calling from several Python threads, so that the threads are not
+multiplied. The results do not depend on the number of threads.
+
+A Python radial function (:py:class:`Radial`) runs under the GIL, so models with one
+gain nothing from several Python threads.

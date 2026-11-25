@@ -106,7 +106,7 @@ Br, Btheta, Bphi = model(r, theta, phi)
 ```
 
 Models in the Swarm SHC format (e.g. LCS-1) can be read directly:
-`potsynth_mag_alloc_shc("LCS-1.shc", 6371.2, rmin, rmax, POTSYNTH_MAG_B, &params)` in C, or
+`potsynth_mag_alloc_shc("LCS-1.shc", 0, 6371.2, rmin, rmax, POTSYNTH_MAG_B, &params)` in C, or
 `potsynth.MagModel.from_shc("LCS-1.shc", rmin=rmin, rmax=rmax)` in Python.
 
 Gravity models in the ICGEM format (e.g. EGM2008, here truncated at degree 720) give the

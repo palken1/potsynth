@@ -8,7 +8,7 @@ import numpy as np
 
 from . import _lib
 from ._lib import lib
-from .core import OPTIONS_DOC, _coefficients, _Evaluator, _options, _raise_radial, _reset_radial
+from .core import OPTIONS_DOC, _coefficients, _Evaluator, _options, _quantity_list, _raise_radial, _reset_radial
 
 _NORMS = {"full": _lib.VSH_NORM_FULL, "schmidt": _lib.VSH_NORM_SCHMIDT}
 _QUANTITIES = {"V": (_lib.VSH_V, ("V_r", "V_theta", "V_phi")),
@@ -109,6 +109,8 @@ class VshModel(_Evaluator):
             raise ValueError("a, b and c must have the same shape")
         nexp = shapes.pop()[0]
         _, lmax, mmax = _coefficients(_first_given(a, b, c), lmin, lmax, mmax, "coefficients")
+        a, b, c = (None if x is None else _coefficients(x, lmin, lmax, mmax, "coefficients")[0]
+                   for x in (a, b, c))
         p, chunk = _options(options)
 
         if radial is not None:
@@ -124,14 +126,14 @@ class VshModel(_Evaluator):
         _lib.clear_error()
         _reset_radial(radial)
         w_ptr = lib.potsynth_vsh_alloc(lmin, lmax, mmax, nexp, ptr(a), ptr(b), ptr(c), _NORMS[norm],
-                                       flags, rmin, rmax,
-                                       None if radial is None else ctypes.byref(radial._c),
-                                       ctypes.byref(p))
+                                       rmin, rmax, None if radial is None else ctypes.byref(radial._c),
+                                       flags, ctypes.byref(p))
         if not w_ptr:
             _raise_radial(radial, _lib.POTSYNTH_EINVAL, "potsynth_vsh_alloc")
         super().__init__(w_ptr, nexp * len(names), chunk, needs_r=radial is not None)
         self.nexp = nexp
         self.outputs = names
+        self.quantities = _quantity_list(quantities)
 
     def __call__(self, r, theta, phi):
         out = self._evaluate(r, theta, phi)

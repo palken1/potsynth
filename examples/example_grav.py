@@ -61,7 +61,7 @@ print(f"evaluation:  {npts} points in {time.perf_counter() - t0:.3f} s")
 direct = potsynth.GravModel(coef, GM, a, quantities="V,g", method="direct")
 fd = direct(r[:1000], theta[:1000], phi[:1000])
 gh = np.max(np.hypot(fd.g_theta, fd.g_phi))
-for name in model.quantities:
+for name in model.outputs:
     x, xd = getattr(field, name)[:1000], getattr(fd, name)
     err = np.max(np.abs(x - xd))
     size = gh if name in ("g_theta", "g_phi") else np.max(np.abs(xd))

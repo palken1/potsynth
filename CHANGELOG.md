@@ -6,13 +6,10 @@ between minor versions.
 
 ## 0.1.0 (unreleased)
 
-Terminology as in the paper (Alken and Burchill): a *functional* (formerly *channel*) is
-one linear functional of the potential requested from the core, and an *irreducible
-component* (formerly *quantity*) is the set of functionals whose accuracy is controlled
-together. `potsynth_channel` is now `potsynth_functional`, `nchan` is `nfunc` (in
-`potsynth_alloc` and `potsynth_info`) and the Python `Channel` is `Functional`; the old
-type and class names, and `info["nchan"]` in Python, remain as deprecated aliases.
-The front-ends keep `quantities` for the physical quantities they compute.
+Terminology as in the paper (Alken and Burchill): a *functional* is one linear functional
+of the potential requested from the core, and an *irreducible component* is the set of
+functionals whose accuracy is controlled together. The front-ends keep `quantities` for
+the physical quantities they compute.
 
 First public release.
 
@@ -116,17 +113,27 @@ First public release.
 - Colatitude range of the evaluation points (`theta_min`, `theta_max` of the
   parameters): the fast method stores only the grid rows of the range, with identical
   results; for data in a polar cap or a region.
+- Interface for the release: `potsynth_version()` and `potsynth_abi()` report the
+  library's version and the layout of its public structures (`POTSYNTH_ABI`), and the
+  Python package refuses a library of another layout; `potsynth_parameters` and
+  `potsynth_info` end in reserved space (zeroed by `potsynth_default_parameters`), so
+  that fields can be added without changing their size;
+  `potsynth_eval_set_threads` sets the threads of one evaluation workspace (0: those of
+  the model).
 
 ### Front-ends
 
 - Magnetic (`potsynth_mag.h`): B and its gradient tensor grad B from Schmidt
-  semi-normalized Gauss coefficients; Swarm SHC reader (e.g. LCS-1).
+  semi-normalized Gauss coefficients; Swarm SHC reader (e.g. LCS-1), with truncation at
+  a given degree as the `.gfc` reader.
 - Gravity (`potsynth_grav.h`): potential V, acceleration g and gravity gradient tensor
   T from fully normalized coefficients; ICGEM `.gfc` reader (EGM2008, EIGEN, XGM, ...).
 - Vector spherical harmonics (`potsynth_vsh.h`): any number of vector fields
   sum f_j(r) [a Y r + b Psi + c Phi] with radial functions of the caller; the field,
   its surface divergence and the radial component of its curl; Schmidt or fully
-  normalized coefficients. The model is an ordinary workspace.
+  normalized coefficients. The model is an ordinary workspace. `potsynth_vsh_alloc`
+  takes its arguments in the order of the other constructors (coefficients, radial
+  range, radial functions, quantities, parameters).
 - Geodetic helpers: WGS84/GRS80 ellipsoids, geodetic to geocentric coordinates, normal
   field zonal coefficients, normal gravity. The "Gravity recipes" chapter of the
   documentation shows how to compute disturbances, anomalies, height anomalies,
@@ -143,6 +150,17 @@ First public release.
   one place, and an unknown one is an error;
   `rows()` (the outputs of a point next to each other), the colatitude range
   (`theta_min`, `theta_max`) and model files (`write()`, `potsynth.read()`) for all models.
+- The same attributes and defaults in all models: `outputs` names the outputs (also of
+  `Model` and `SetsModel`, with `names=`), `quantities` holds the requested quantities
+  of the front-ends, `rmin` and `rmax` default to None (direct method only, or the
+  range of the radial functions), and a coefficient vector of all degrees up to a
+  higher degree is truncated at `lmax`. `write()` keeps the output names next to the
+  model file (`filename.json`), and `read()` restores them. `SetsModel` needs `a`
+  unless radial functions are given (it defaulted to 1).
+- One model can be evaluated from several Python threads at once: each thread gets its
+  own evaluation workspace; `eval_threads` sets their OpenMP threads.
+- `potsynth.__version__`, and a check at import that the library has the layout of the
+  bindings.
 - Wheels for Linux (x86-64, aarch64), macOS (arm64, x86-64) and Windows (AMD64). The
   x86-64 wheels contain an AVX2/FMA build and a portable build of the library and select
   one at import time.

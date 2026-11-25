@@ -25,7 +25,7 @@ test_shc_fail(const char * desc, const int expected)
   potsynth_shc * shc;
 
   test_last_error();
-  shc = potsynth_shc_read(TEST_SHC_FILE);
+  shc = potsynth_shc_read(TEST_SHC_FILE, 0);
 
   ps_test(shc != NULL, "shc: %s rejected", desc);
   ps_test_int(test_last_error(), expected, "shc: %s error code", desc);
@@ -73,7 +73,7 @@ test_shc_valid(void)
 
   test_shc_write(contents);
 
-  shc = potsynth_shc_read(TEST_SHC_FILE);
+  shc = potsynth_shc_read(TEST_SHC_FILE, 0);
   ps_test(shc == NULL, "shc: valid file read");
   if (shc == NULL)
     return;
@@ -87,6 +87,24 @@ test_shc_valid(void)
   ps_test_rel(shc->gh[potsynth_idx(3L, 3L, 2L, 3L)], 2.0, 0.0, "shc: g33");
   ps_test_rel(shc->gh[potsynth_idx(3L, -3L, 2L, 3L)], -2.0, 0.0, "shc: h33");
 
+  /* truncation at lmax = 2; lmax above the file or below lmin is refused */
+  {
+    potsynth_shc * s2 = potsynth_shc_read(TEST_SHC_FILE, 2);
+    ps_test(s2 == NULL || s2->lmax != 2 || s2->mmax != 2, "shc: lmax = 2 read");
+    if (s2 != NULL)
+      {
+        size_t k;
+        for (k = 0; k < potsynth_nlm(2, 2, 2); ++k)
+          ps_test_rel(s2->gh[k], shc->gh[k], 0.0, "shc: truncated coefficient %zu", k);
+        potsynth_shc_free(s2);
+      }
+    test_last_error();
+    ps_test(potsynth_shc_read(TEST_SHC_FILE, 4) != NULL, "shc: lmax above the file rejected");
+    ps_test_int(test_last_error(), POTSYNTH_EINVAL, "shc: lmax above the file error code");
+    ps_test(potsynth_shc_read(TEST_SHC_FILE, 1) != NULL, "shc: lmax below lmin rejected");
+    ps_test_int(test_last_error(), POTSYNTH_EINVAL, "shc: lmax below lmin error code");
+  }
+
   /* model from the file = model from the vector (bitwise) */
   for (i = 0; i < n; ++i)
     {
@@ -96,7 +114,7 @@ test_shc_valid(void)
     }
 
   params.method = POTSYNTH_METHOD_DIRECT;
-  w1 = potsynth_mag_alloc_shc(TEST_SHC_FILE, a, a, a + 100.0, POTSYNTH_MAG_B, &params);
+  w1 = potsynth_mag_alloc_shc(TEST_SHC_FILE, 0, a, a, a + 100.0, POTSYNTH_MAG_B, &params);
   w2 = potsynth_mag_alloc(shc->lmin, shc->lmax, shc->mmax, shc->gh, a, a, a + 100.0, POTSYNTH_MAG_B, &params);
   ew1 = potsynth_eval_alloc(0, w1);
   ew2 = potsynth_eval_alloc(0, w2);
@@ -155,6 +173,6 @@ test_shc(void)
   remove(TEST_SHC_FILE);
 
   test_last_error();
-  ps_test(potsynth_shc_read("nonexistent_file.shc") != NULL, "shc: nonexistent file rejected");
+  ps_test(potsynth_shc_read("nonexistent_file.shc", 0) != NULL, "shc: nonexistent file rejected");
   ps_test_int(test_last_error(), POTSYNTH_EINVAL, "shc: nonexistent file error code");
 }

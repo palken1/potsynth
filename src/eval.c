@@ -58,6 +58,59 @@ static int eval_direct(const size_t n, const double * r, const double * theta, c
                        const int rows, double * out, potsynth_eval_workspace * ew);
 
 /*
+potsynth_eval_set_threads()
+  Set the number of OpenMP threads of the evaluations with this workspace
+
+Inputs: ew       - evaluation workspace
+        nthreads - threads, or 0 for those of the model (its parameters)
+
+Return: success or error
+
+Notes:
+1) A program that evaluates one model from several threads of its own, each with
+its own evaluation workspace, can set 1 here so that the threads are not
+multiplied; the results do not depend on the number of threads
+*/
+
+int
+potsynth_eval_set_threads(potsynth_eval_workspace * ew, const int nthreads)
+{
+  int n;
+
+  if (ew == NULL || nthreads < 0)
+    {
+      POTSYNTH_ERROR ("evaluation workspace must be given and nthreads >= 0", POTSYNTH_EINVAL);
+    }
+
+  n = (nthreads > 0) ? potsynth_max_threads(nthreads) : ew->w->nthreads;
+
+  if (n > ew->nalloc)
+    {
+      double * t = potsynth_aligned_alloc((size_t) n * ew->tstride * sizeof(double));
+      double * o = (ew->oscratch != NULL) ? malloc((size_t) n * ew->w->nfunc * sizeof(double)) : NULL;
+
+      if (t == NULL || (ew->oscratch != NULL && o == NULL))
+        {
+          potsynth_aligned_free(t);
+          free(o);
+          POTSYNTH_ERROR ("unable to allocate thread scratch", POTSYNTH_ENOMEM);
+        }
+
+      potsynth_aligned_free(ew->tscratch);
+      ew->tscratch = t;
+      if (ew->oscratch != NULL)
+        {
+          free(ew->oscratch);
+          ew->oscratch = o;
+        }
+      ew->nalloc = n;
+    }
+
+  ew->nthreads = n;
+  return POTSYNTH_SUCCESS;
+}
+
+/*
 potsynth_eval_alloc()
   Allocate an evaluation workspace
 
@@ -113,6 +166,7 @@ potsynth_eval_alloc(const size_t chunk, const potsynth_workspace * w)
     }
 
   ew->tstride = round8(tsize);
+  ew->nalloc = ew->nthreads;
   ew->tscratch = potsynth_aligned_alloc((size_t) ew->nthreads * ew->tstride * sizeof(double));
   if (w->nrad > 0)
     ew->rscratch = malloc(w->nrad * sizeof(double));

@@ -195,8 +195,8 @@ C
    params.theta_max = 50.0 * M_PI / 180.0;
 
    /* a, b, c: nexp * 4 * nlm coefficients each, field e at node j at (e*4 + j)*nlm */
-   w = potsynth_vsh_alloc(1, lmax, lmax, nexp, a, b, c, POTSYNTH_VSH_NORM_SCHMIDT, POTSYNTH_VSH_V,
-                          rnode[0], rnode[3], &radial, &params);
+   w = potsynth_vsh_alloc(1, lmax, lmax, nexp, a, b, c, POTSYNTH_VSH_NORM_SCHMIDT, rnode[0], rnode[3],
+                          &radial, POTSYNTH_VSH_V, &params);
    ew = potsynth_eval_alloc(0, w);
 
    /* (V_r, V_theta, V_phi) of field e at point i in G[(i*nexp + e)*3 + 0..2] */

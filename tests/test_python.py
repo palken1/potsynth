@@ -118,6 +118,22 @@ def test_api():
         m2 = potsynth.MagModel(shc.gh, lmax=2, method="direct")
         check(np.array_equal(np.array(m1(7000.0, 1.0, 2.0)), np.array(m2(7000.0, 1.0, 2.0))),
               "MagModel.from_shc")
+        # truncation: by the reader, and of a longer vector
+        s1 = potsynth.read_shc(f, lmax=1)
+        check(s1.lmax == 1 and np.array_equal(s1.gh, shc.gh[:3]), "read_shc lmax")
+        m3 = potsynth.MagModel.from_shc(f, lmax=1, method="direct")
+        m4 = potsynth.MagModel(shc.gh, lmax=1, method="direct")
+        check(np.array_equal(np.array(m3(7000.0, 1.0, 2.0)), np.array(m4(7000.0, 1.0, 2.0))),
+              "MagModel.from_shc lmax, truncated vector")
+        m5 = potsynth.MagModel(shc.gh, lmax=2, mmax=1, method="direct")
+        m6 = potsynth.MagModel(shc.gh[[0, 1, 2, 4, 5, 6]], lmax=2, mmax=1, method="direct")
+        check(np.array_equal(np.array(m5(7000.0, 1.0, 2.0)), np.array(m6(7000.0, 1.0, 2.0))),
+              "truncated vector, mmax < lmax")
+        try:
+            potsynth.read_shc(f, lmax=3)
+            check(False, "read_shc lmax above the file accepted")
+        except potsynth.PotsynthError:
+            pass
         with open(f, "w") as fp:
             fp.write("1 1 2 2 1\n2015.0 2020.0\n1 0 1 1\n1 1 1 1\n1 -1 1 1\n")
         try:
@@ -166,13 +182,13 @@ def test_grav():
             m = potsynth.GravModel.from_gfc(f, rmin=6.3e6, rmax=6.9e6, method=method)
             out = m(r, th, ph)
             tol = 1e-13 if method == "direct" else 1e-9
-            check(m.quantities == ("V", "g_r", "g_theta", "g_phi"), "GravModel quantities")
+            check(m.outputs == ("V", "g_r", "g_theta", "g_phi") and m.quantities == ("V", "g"), "GravModel outputs")
             check(rel_err(out.V, V) < tol, f"GravModel V ({method})")
             check(rel_err(np.array([out.g_r, out.g_theta, out.g_phi]),
                           np.array([gr, gt, 0 * gr])) < tol, f"GravModel g ({method})")
 
         m = potsynth.GravModel(g.coef, GM, a, quantities=["g_r"], method="direct")
-        check(m.quantities == ("g_r",) and rel_err(m(r, th, ph).g_r, gr) < 1e-13,
+        check(m.outputs == ("g_r",) and rel_err(m(r, th, ph).g_r, gr) < 1e-13,
               "GravModel g_r only")
         try:
             potsynth.GravModel(g.coef, GM, a, quantities="W")
@@ -221,7 +237,7 @@ def test_hessian():
         g = potsynth.GravModel(coef, 1.0, 1.0, lmax=L, quantities="T", rmin=1.0, rmax=1.3,
                                method=method, eps=1e-12)
         out = g(r, th, ph)
-        check(g.quantities == ("T_rr", "T_rt", "T_rp", "T_tt", "T_tp", "T_pp"), "GravModel T names")
+        check(g.outputs == ("T_rr", "T_rt", "T_rp", "T_tt", "T_tp", "T_pp"), "GravModel T names")
         check(rel_err(np.array(out), T) < (1e-13 if method == "direct" else 1e-11),
               f"GravModel T vs reference, {method} ({rel_err(np.array(out), T):.2e})")
 
@@ -232,7 +248,7 @@ def test_hessian():
     mm = potsynth.MagModel(gh, lmax=L, a=am, quantities="B,gradB", method="direct")
     gm = potsynth.GravModel(cm, am * am, am, lmax=L, lmin=1, quantities="T", method="direct")
     fm, fg = mm(r * am, th, ph), gm(r * am, th, ph)
-    check(mm.quantities[:3] == ("B_r", "B_theta", "B_phi") and len(mm.quantities) == 9,
+    check(mm.outputs[:3] == ("B_r", "B_theta", "B_phi") and len(mm.outputs) == 9 and mm.quantities == ("B", "gradB"),
           "MagModel B,gradB names")
     check(rel_err(np.array(fm[3:]), -np.array(fg)) < 1e-13, "MagModel gradB = -GravModel T")
     check(mm.info["nout"] == 9 and mm.info["nfunc"] == 8, "MagModel B,gradB info nout/nfunc")
@@ -607,9 +623,9 @@ def test_sets():
     # errors: mixed component, unknown option, unknown operator
     for bad, kind in ((lambda: potsynth.SetsModel(coef, 1, L, [potsynth.Output([potsynth.Term(0, "P"),
                                                                                   potsynth.Term(1, "dP")])],
-                                                   method="direct"), potsynth.PotsynthError),
+                                                   a=a, method="direct"), potsynth.PotsynthError),
                       (lambda: potsynth.MagModel(coef[0], lmax=L, rmin=6700.0, rmax=6900.0, epsilon=1e-6), TypeError),
-                      (lambda: potsynth.SetsModel(coef, 1, L, [potsynth.Output([potsynth.Term(0, "Q")])]), ValueError)):
+                      (lambda: potsynth.SetsModel(coef, 1, L, [potsynth.Output([potsynth.Term(0, "Q")])], a=a), ValueError)):
         try:
             bad()
             check(False, f"invalid model accepted ({kind.__name__})")
@@ -617,6 +633,35 @@ def test_sets():
             pass
 
     print("  sets and options checks done")
+
+
+def test_front_ends():
+    """Output names and requested quantities; names kept with model files; defaults"""
+    import tempfile
+    gh = np.zeros(potsynth.nlm(1, 30)) + 0.01
+    m = potsynth.MagModel(gh, lmax=30, rmin=6671.2, rmax=6971.2, quantities="B,gradB", method="fast")
+    check(len(m.outputs) == 9 and m.quantities == ("B", "gradB"), "MagModel outputs and quantities")
+    check(potsynth.MagModel(gh, lmax=30).info["method"] == "direct", "no radial range: direct method")
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "m.bin")
+        m.write(f)
+        r = potsynth.read(f)
+        check(r.outputs == m.outputs and r.quantities == m.quantities and r.model == "MagModel",
+              "model file keeps output names")
+        check(np.array_equal(r(6800.0, 1.0, 2.0), np.array(m(6800.0, 1.0, 2.0))), "model file values")
+        os.remove(f + ".json")
+        r = potsynth.read(f)
+        check(r.outputs[0] == "f0" and len(r.outputs) == 9 and r.quantities is None, "model file without names")
+    coef = np.zeros(potsynth.nlm(1, 10)) + 0.1
+    g = potsynth.Model(coef, 1, 10, [potsynth.Functional(0, "P"), potsynth.Functional(1, "dP")], 1.0,
+                       names=["V", "dV"], method="direct")
+    check(g.outputs == ("V", "dV"), "Model names")
+    try:
+        potsynth.SetsModel(coef[None, :], 1, 10, [potsynth.Output([potsynth.Term(0)])], method="direct")
+        check(False, "SetsModel without a or radial functions accepted")
+    except ValueError:
+        pass
+    print("  front-end checks done")
 
 
 def test_version():
@@ -629,15 +674,34 @@ def test_version():
     print(f"  library: {potsynth.library_path}")
 
 
-def test_former_names():
-    # Channel and info["nchan"] are the former names of Functional and info["nfunc"]
-    check(potsynth.Channel is potsynth.Functional, "former name Channel")
-    m = potsynth.MagModel(np.array([0.0, 1.0, 2.0]), lmax=1, quantities="B", method="direct")
-    check(m.info["nchan"] == m.info["nfunc"] == 3, "former name info['nchan']")
+def test_threads():
+    # one model called from several Python threads at once: same values as one call
+    import threading
+    gh = np.zeros(potsynth.nlm(1, 20)) + 0.01
+    m = potsynth.MagModel(gh, lmax=20, a=6371.2, rmin=6671.2, rmax=6971.2, quantities="B", method="fast")
+    rng = np.random.default_rng(3)
+    r = rng.uniform(6671.2, 6971.2, 5000)
+    th = np.arccos(rng.uniform(-1, 1, 5000))
+    ph = rng.uniform(0, 2 * np.pi, 5000)
+    ref = np.array(m(r, th, ph))
+    m.eval_threads = 1
+    out = [None] * 4
+
+    def work(k):
+        out[k] = np.array(m(r, th, ph))
+
+    ts = [threading.Thread(target=work, args=(k,)) for k in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    check(all(np.array_equal(o, ref) for o in out), "four Python threads give the values of one call")
+    check(potsynth._lib.lib.potsynth_abi() == potsynth._lib.ABI, "library layout as the bindings")
 
 
 if __name__ == "__main__":
     test_version()
+    test_front_ends()
     test_reference()
     test_api()
     test_grav()
@@ -645,6 +709,6 @@ if __name__ == "__main__":
     test_geodesy()
     test_vsh()
     test_sets()
-    test_former_names()
+    test_threads()
     print("FAILED" if nfail else "all passed")
     sys.exit(1 if nfail else 0)

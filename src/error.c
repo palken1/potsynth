@@ -71,6 +71,34 @@ potsynth_set_error_handler_off(void)
   return potsynth_set_error_handler(no_handler);
 }
 
+#define POTSYNTH_STR_(x) #x
+#define POTSYNTH_STR(x) POTSYNTH_STR_(x)
+
+/*
+potsynth_version()
+  Version of the library, "major.minor.patch" (POTSYNTH_VERSION_xxx of the
+headers it was built from)
+*/
+
+const char *
+potsynth_version(void)
+{
+  return POTSYNTH_STR(POTSYNTH_VERSION_MAJOR) "." POTSYNTH_STR(POTSYNTH_VERSION_MINOR) "."
+         POTSYNTH_STR(POTSYNTH_VERSION_PATCH);
+}
+
+/*
+potsynth_abi()
+  Layout of the public structs the library was built with (POTSYNTH_ABI); a
+program compares it with the POTSYNTH_ABI of the headers it was compiled with
+*/
+
+int
+potsynth_abi(void)
+{
+  return POTSYNTH_ABI;
+}
+
 /*
 potsynth_strerror()
   Return a description of an error code

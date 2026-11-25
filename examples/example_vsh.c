@@ -129,8 +129,8 @@ main(void)
   params.eps = 1.0e-8;
   params.theta_max = theta_max;
 
-  w = potsynth_vsh_alloc(1, lmax, lmax, nexp, a, b, c, POTSYNTH_VSH_NORM_SCHMIDT, POTSYNTH_VSH_V,
-                         rnode[0], rnode[3], &radial, &params);
+  w = potsynth_vsh_alloc(1, lmax, lmax, nexp, a, b, c, POTSYNTH_VSH_NORM_SCHMIDT, rnode[0], rnode[3], &radial,
+                         POTSYNTH_VSH_V, &params);
   if (w == NULL)
     return 1;
 

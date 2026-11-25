@@ -112,7 +112,7 @@ main(int argc, char * argv[])
   /* 1. Gauss coefficients: from an SHC file, or synthetic */
   if (argc > 1)
     {
-      shc = potsynth_shc_read(argv[1]);
+      shc = potsynth_shc_read(argv[1], 0);
       if (shc == NULL)
         exit(1); /* reported by the error handler */
 

@@ -40,18 +40,20 @@ potsynth_shc_read()
   Read a static model from a Swarm SHC coefficient file
 
 Inputs: filename - SHC file
+        lmax     - maximum degree to read (truncation), or 0 for the lmax of the file
 
 Return: pointer to model, or NULL on error
 
 Notes:
-1) All coefficients for lmin <= l <= lmax, |m| <= l must be present exactly once
+1) All coefficients for lmin <= l <= lmax (of the file), |m| <= l must be present
+exactly once
 
 2) The coefficients are stored in shc->gh, indexed by
 potsynth_idx(l,m,lmin,lmax), ready for potsynth_mag_alloc()
 */
 
 potsynth_shc *
-potsynth_shc_read(const char * filename)
+potsynth_shc_read(const char * filename, const size_t lmax)
 {
   char line[POTSYNTH_SHC_LINE];
   char msg[POTSYNTH_SHC_LINE + 128];
@@ -86,10 +88,18 @@ potsynth_shc_read(const char * filename)
                filename, lineno);
       POTSYNTH_ERROR_NULL (msg, POTSYNTH_EINVAL);
     }
-  else if (hdr[1] > POTSYNTH_LMAX)
+  else if ((long) lmax > hdr[1] || (lmax > 0 && (long) lmax < hdr[0]))
     {
       fclose(fp);
-      snprintf(msg, sizeof(msg), "%s: lmax = %ld exceeds POTSYNTH_LMAX", filename, hdr[1]);
+      snprintf(msg, sizeof(msg), "%s: requested lmax = %zu outside the degrees %ld..%ld of the file",
+               filename, lmax, hdr[0], hdr[1]);
+      POTSYNTH_ERROR_NULL (msg, POTSYNTH_EINVAL);
+    }
+  else if ((lmax > 0 ? (long) lmax : hdr[1]) > POTSYNTH_LMAX)
+    {
+      fclose(fp);
+      snprintf(msg, sizeof(msg), "%s: lmax = %ld exceeds POTSYNTH_LMAX; give a smaller lmax", filename,
+               (lmax > 0 ? (long) lmax : hdr[1]));
       POTSYNTH_ERROR_NULL (msg, POTSYNTH_EUNSUP);
     }
   else if (hdr[2] != 1)
@@ -109,7 +119,7 @@ potsynth_shc_read(const char * filename)
     }
 
   shc->lmin = (size_t) hdr[0];
-  shc->lmax = (size_t) hdr[1];
+  shc->lmax = (lmax > 0) ? lmax : (size_t) hdr[1];
   shc->mmax = shc->lmax;
   nlm = potsynth_nlm(shc->lmin, shc->lmax, shc->mmax);
   shc->gh = malloc(nlm * sizeof(double));
@@ -145,10 +155,12 @@ potsynth_shc_read(const char * filename)
 
       if (c != 3)
         err = (c == 4) ? "unexpected extra column" : "expected 'l m value'";
-      else if (l < (long) shc->lmin || l > (long) shc->lmax || labs(m) > l)
+      else if (l < (long) shc->lmin || l > hdr[1] || labs(m) > l)
         err = "degree/order outside the range of the header";
       else if (!isfinite(value))
         err = "non-finite coefficient";
+      else if (l > (long) shc->lmax)
+        continue; /* above the requested lmax */
 
       if (err == NULL)
         {
@@ -223,10 +235,10 @@ Return: pointer to workspace, or NULL on error
 */
 
 potsynth_workspace *
-potsynth_mag_alloc_shc(const char * filename, const double a, const double rmin, const double rmax,
+potsynth_mag_alloc_shc(const char * filename, const size_t lmax, const double a, const double rmin, const double rmax,
                        const int quantities, const potsynth_parameters * params)
 {
-  potsynth_shc * shc = potsynth_shc_read(filename);
+  potsynth_shc * shc = potsynth_shc_read(filename, lmax);
   potsynth_workspace * w;
 
   if (shc == NULL)

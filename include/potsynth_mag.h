@@ -52,9 +52,9 @@ POTSYNTH_API size_t potsynth_mag_nout(const int quantities);
 POTSYNTH_API void potsynth_mag_rtp2nec(const size_t n, double * B);
 
 /* shc.c */
-POTSYNTH_API potsynth_shc * potsynth_shc_read(const char * filename);
+POTSYNTH_API potsynth_shc * potsynth_shc_read(const char * filename, const size_t lmax);
 POTSYNTH_API void potsynth_shc_free(potsynth_shc * shc);
-POTSYNTH_API potsynth_workspace * potsynth_mag_alloc_shc(const char * filename, const double a,
+POTSYNTH_API potsynth_workspace * potsynth_mag_alloc_shc(const char * filename, const size_t lmax, const double a,
                                                          const double rmin, const double rmax,
                                                          const int quantities,
                                                          const potsynth_parameters * params);

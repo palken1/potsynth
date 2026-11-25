@@ -78,7 +78,8 @@ class Params_t(ctypes.Structure):
                 ("nthreads", ctypes.c_int),
                 ("npts_hint", ctypes.c_size_t),
                 ("theta_min", ctypes.c_double),
-                ("theta_max", ctypes.c_double)]
+                ("theta_max", ctypes.c_double),
+                ("reserved", ctypes.c_double * 8)]
 
 
 class Shc_t(ctypes.Structure):
@@ -124,7 +125,8 @@ class Info_t(ctypes.Structure):
                 ("grid_bytes", ctypes.c_size_t),
                 ("ncomp", ctypes.c_size_t),
                 ("err_radial", ctypes.c_double),
-                ("err_check", ctypes.c_double)]
+                ("err_check", ctypes.c_double),
+                ("reserved", ctypes.c_double * 8)]
 
 
 def _libname(base):
@@ -174,6 +176,23 @@ def _load():
 
 lib, library_path = _load()
 
+# the library must be the one these bindings describe: its version, and the layout of the
+# structs copied below (POTSYNTH_ABI in potsynth.h), or memory would be misread
+ABI = 1
+VERSION = "0.1.0"
+try:
+    lib.potsynth_version.restype = ctypes.c_char_p
+    lib.potsynth_version.argtypes = []
+    lib.potsynth_abi.restype = ctypes.c_int
+    lib.potsynth_abi.argtypes = []
+    _lib_version, _lib_abi = lib.potsynth_version().decode(), lib.potsynth_abi()
+except AttributeError:          # a library from before these functions
+    _lib_version, _lib_abi = "unknown", 0
+if _lib_abi != ABI or _lib_version != VERSION:
+    raise ImportError(f"the potsynth library {library_path} is version {_lib_version} (struct layout "
+                      f"{_lib_abi}), but this package needs {VERSION} (layout {ABI}); install or build "
+                      "a matching library, or point POTSYNTH_LIBRARY at one")
+
 lib.potsynth_strerror.restype = ctypes.c_char_p
 lib.potsynth_strerror.argtypes = [ctypes.c_int]
 
@@ -195,7 +214,7 @@ lib.potsynth_mag_alloc.argtypes = [ctypes.c_size_t, ctypes.c_size_t, ctypes.c_si
                                    ctypes.c_int, ctypes.POINTER(Params_t)]
 
 lib.potsynth_shc_read.restype = ctypes.POINTER(Shc_t)
-lib.potsynth_shc_read.argtypes = [ctypes.c_char_p]
+lib.potsynth_shc_read.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
 
 lib.potsynth_shc_free.restype = None
 lib.potsynth_shc_free.argtypes = [ctypes.POINTER(Shc_t)]
@@ -234,6 +253,9 @@ lib.potsynth_eval_alloc.argtypes = [ctypes.c_size_t, ctypes.c_void_p]
 lib.potsynth_eval_free.restype = None
 lib.potsynth_eval_free.argtypes = [ctypes.c_void_p]
 
+lib.potsynth_eval_set_threads.restype = ctypes.c_int
+lib.potsynth_eval_set_threads.argtypes = [ctypes.c_void_p, ctypes.c_int]
+
 lib.potsynth_eval.restype = ctypes.c_int
 lib.potsynth_eval.argtypes = [ctypes.c_size_t, c_double_p, c_double_p, c_double_p, c_double_p,
                               ctypes.c_void_p]
@@ -255,8 +277,8 @@ lib.potsynth_vsh_nout.argtypes = [ctypes.c_int]
 
 lib.potsynth_vsh_alloc.restype = ctypes.c_void_p
 lib.potsynth_vsh_alloc.argtypes = [ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t,
-                                   c_double_p, c_double_p, c_double_p, ctypes.c_int, ctypes.c_int,
-                                   ctypes.c_double, ctypes.c_double, ctypes.POINTER(Radial_t),
+                                   c_double_p, c_double_p, c_double_p, ctypes.c_int,
+                                   ctypes.c_double, ctypes.c_double, ctypes.POINTER(Radial_t), ctypes.c_int,
                                    ctypes.POINTER(Params_t)]
 
 lib.potsynth_write.restype = ctypes.c_int

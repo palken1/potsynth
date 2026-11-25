@@ -2,6 +2,7 @@
 Generic potential-field synthesis: functionals of an internal potential.
 """
 import ctypes
+import json
 import os
 import threading
 from dataclasses import dataclass
@@ -135,8 +136,6 @@ OPTIONS_DOC = """
 
 
 
-Channel = Functional  # former name (deprecated)
-
 def _options(options):
     """C parameters and chunk size from the keyword options of a model"""
     unknown = set(options) - set(_OPTIONS)
@@ -168,9 +167,25 @@ def _lmax_of(n, lmin):
     return lmax
 
 
+def _truncate(coef, lmin, lmax, mmax):
+    """The coefficients of degrees lmin..lmax and orders up to mmax from vectors (the last
+    axis) of a complete set of degrees lmin..L, L >= lmax, or None if coef is not one"""
+    n = coef.shape[-1]
+    try:
+        L = _lmax_of(n, lmin)
+    except ValueError:
+        return None
+    if L < lmax:
+        return None
+    sel = [np.arange(idx(l, -min(l, mmax), lmin, L), idx(l, min(l, mmax), lmin, L) + 1)
+           for l in range(lmin, lmax + 1)]
+    return coef[..., np.concatenate(sel)] if sel else coef[..., :0]
+
+
 def _coefficients(coef, lmin, lmax, mmax, name="coef"):
     """Coefficient vector, lmax and mmax from a vector in the layout of idx() or a tuple
-    (C, S) of arrays indexed [l, m]"""
+    (C, S) of arrays indexed [l, m]. A complete vector of a higher degree is truncated
+    to lmax and mmax."""
     if isinstance(coef, tuple):
         C, S = coef
         lmax = np.asarray(C).shape[0] - 1 if lmax is None else lmax
@@ -180,12 +195,42 @@ def _coefficients(coef, lmin, lmax, mmax, name="coef"):
         coef = np.asarray(coef, dtype=float)
         lmax = _lmax_of(coef.shape[-1], lmin) if lmax is None else lmax
         mmax = lmax if mmax is None else mmax
+    if coef.shape[-1] > nlm(lmin, lmax, mmax):
+        t = _truncate(coef, lmin, lmax, mmax)
+        coef = coef if t is None else t
     coef = np.ascontiguousarray(coef, dtype=float)
     if coef.shape[-1] != nlm(lmin, lmax, mmax):
-        raise ValueError(f"{name} has length {coef.shape[-1]}, expected {nlm(lmin, lmax, mmax)}")
+        raise ValueError(f"{name} has length {coef.shape[-1]}, expected {nlm(lmin, lmax, mmax)} "
+                         f"(or a complete set of degrees {lmin}..L with L >= {lmax})")
     if lmax > _lib.LMAX:
         raise ValueError(f"lmax > {_lib.LMAX} is not supported")
     return coef, lmax, mmax
+
+
+def _range(rmin, rmax):
+    """rmin and rmax for the C library (0: not given)"""
+    return (0.0 if rmin is None else float(rmin)), (0.0 if rmax is None else float(rmax))
+
+
+def _quantity_list(quantities):
+    """A list or comma-separated string of quantities as a tuple"""
+    if isinstance(quantities, str):
+        quantities = [q.strip() for q in quantities.split(",") if q.strip()]
+    return tuple(quantities)
+
+
+def _names(names, n, what):
+    """Output names: those given, or f0, f1, ..."""
+    if names is None:
+        return tuple(f"f{i}" for i in range(n))
+    names = tuple(str(x) for x in names)
+    if len(names) != n:
+        raise ValueError(f"names has {len(names)} entries for {n} {what}")
+    return names
+
+
+def _sidecar(filename):
+    return os.fsdecode(filename) + ".json"
 
 
 def _rfac(rfac, lmax, keep, what):
@@ -301,28 +346,77 @@ class Radial:
         return callback
 
 
-class _Evaluator:
-    """Owns a C workspace and an evaluation workspace; evaluates its functionals."""
+class _ModelHandle:
+    """Owns a C model workspace; freed when the last user (the model object and the
+    evaluation workspaces of its threads) is gone."""
 
-    def __init__(self, ptr, nfunc, chunk, needs_r=True):
-        self._ptr = ptr
-        self._nfunc = nfunc
-        self._needs_r = needs_r
+    def __init__(self, ptr):
+        self.ptr = ptr
+
+    def __del__(self):
+        if getattr(self, "ptr", None):
+            lib.potsynth_free(self.ptr)
+            self.ptr = None
+
+
+class _EvalWorkspace:
+    """One C evaluation workspace on a model (one per Python thread)."""
+
+    def __init__(self, model, chunk):
+        self._model = model                # keeps the model alive while this exists
         _lib.clear_error()
-        self._ew = lib.potsynth_eval_alloc(chunk, ptr)
-        self._lock = threading.Lock()      # one eval workspace per object
-        if not self._ew:
-            lib.potsynth_free(ptr)
-            self._ptr = None
+        self.ptr = lib.potsynth_eval_alloc(chunk, model.ptr)
+        self.nthreads = 0                  # 0: those of the model
+        if not self.ptr:
             raise MemoryError("potsynth_eval_alloc failed")
 
     def __del__(self):
-        if getattr(self, "_ew", None):
-            lib.potsynth_eval_free(self._ew)
-            self._ew = None
-        if getattr(self, "_ptr", None):
-            lib.potsynth_free(self._ptr)
-            self._ptr = None
+        if getattr(self, "ptr", None):
+            lib.potsynth_eval_free(self.ptr)
+            self.ptr = None
+
+
+class _Evaluator:
+    """Owns a C model workspace and evaluates its functionals. Each Python thread that
+    calls the model gets its own evaluation workspace, so one model can be evaluated
+    from several threads at once."""
+
+    def __init__(self, ptr, nfunc, chunk, needs_r=True):
+        self._model = _ModelHandle(ptr)
+        self._ptr = ptr
+        self._nfunc = nfunc
+        self._needs_r = needs_r
+        self._chunk = chunk
+        self._eval_threads = 0
+        self._local = threading.local()
+        self._workspace()                  # fails here, not at the first call, if out of memory
+
+    @property
+    def eval_threads(self):
+        """OpenMP threads of each evaluation call; 0 (default) means those given at
+        set-up (``nthreads``). Set 1 when calling the model from several Python
+        threads at once, so that the threads are not multiplied."""
+        return self._eval_threads
+
+    @eval_threads.setter
+    def eval_threads(self, n):
+        n = int(n)
+        if n < 0:
+            raise ValueError("eval_threads must be >= 0")
+        self._eval_threads = n
+
+    def _workspace(self):
+        ws = getattr(self._local, "ws", None)
+        if ws is None:
+            ws = _EvalWorkspace(self._model, self._chunk)
+            self._local.ws = ws
+        if ws.nthreads != self._eval_threads:
+            _lib.clear_error()
+            status = lib.potsynth_eval_set_threads(ws.ptr, self._eval_threads)
+            if status:
+                _raise(status, "potsynth_eval_set_threads")
+            ws.nthreads = self._eval_threads
+        return ws
 
     def _points(self, r, theta, phi):
         """Flattened contiguous point arrays (r None for a model without radial
@@ -345,10 +439,10 @@ class _Evaluator:
         ptr = lambda a: None if a is None else a.ctypes.data_as(_lib.c_double_p)
         fn = lib.potsynth_eval_rows if rows else lib.potsynth_eval
         radial = getattr(self, "_radial", None)
-        with self._lock:
-            _lib.clear_error()
-            _reset_radial(radial)
-            status = fn(n, ptr(r), ptr(theta), ptr(phi), ptr(out), self._ew)
+        ws = self._workspace()
+        _lib.clear_error()
+        _reset_radial(radial)
+        status = fn(n, ptr(r), ptr(theta), ptr(phi), ptr(out), ws.ptr)
         if status:
             _raise_radial(radial, status, "potsynth_eval_rows" if rows else "potsynth_eval")
         return out.reshape(shape + (self._nfunc,) if rows else (self._nfunc,) + shape)
@@ -362,12 +456,20 @@ class _Evaluator:
 
     def write(self, filename):
         """Write the model (fast method only) to a file, to be read with
-        potsynth.read() instead of being set up again. Radial functions are not
-        stored; give them again when reading."""
+        potsynth.read() instead of being set up again, and the names of its outputs
+        to filename + ".json". Radial functions are not stored; give them again when
+        reading."""
         _lib.clear_error()
         status = lib.potsynth_write(os.fsencode(filename), self._ptr)
         if status:
             _raise(status, "potsynth_write")
+        meta = {"potsynth": _lib.VERSION, "model": type(self).__name__, "outputs": list(self.outputs)}
+        if getattr(self, "quantities", None) is not None:
+            meta["quantities"] = list(self.quantities)
+        if getattr(self, "nexp", None) is not None:
+            meta["nexp"] = self.nexp
+        with open(_sidecar(filename), "w") as f:
+            json.dump(meta, f, indent=1)
 
     @property
     def info(self):
@@ -375,8 +477,7 @@ class _Evaluator:
         number of irreducible components...)."""
         i = _lib.Info_t()
         lib.potsynth_get_info(ctypes.byref(i), self._ptr)
-        d = {name: getattr(i, name) for name, _ in _lib.Info_t._fields_}
-        d["nchan"] = d["nfunc"]          # former name (deprecated)
+        d = {name: getattr(i, name) for name, _ in _lib.Info_t._fields_ if name != "reserved"}
         d["method"] = _METHOD_NAMES.get(d["method"], d["method"])
         return d
 
@@ -384,7 +485,10 @@ class _Evaluator:
 class LoadedModel(_Evaluator):
     """A model read from a file (potsynth.read()). Calling it with (r, theta, phi)
     returns an array of shape (number of outputs,) + shape of the points, in the
-    order of the outputs of the model that was written."""
+    order of the outputs of the model that was written. outputs names them (from the
+    file filename + ".json" written with the model; f0, f1, ... without it), model is
+    the class of the model that was written and quantities its requested quantities
+    (None if unknown)."""
 
     def __init__(self, filename, radial=None, nthreads=0, chunk=0):
         self._radial = radial          # keeps the C structures of the radial functions alive
@@ -398,6 +502,20 @@ class LoadedModel(_Evaluator):
         lib.potsynth_get_info(ctypes.byref(i), ptr)
         # the radii may be omitted for a model without radial dependence; the library checks
         super().__init__(ptr, int(i.nout), chunk, needs_r=False)
+        meta = {}
+        if os.path.exists(_sidecar(filename)):
+            with open(_sidecar(filename)) as f:
+                meta = json.load(f)
+        nexp = meta.get("nexp", 1)
+        outputs = meta.get("outputs")
+        if outputs is None or len(outputs) * nexp != int(i.nout):
+            outputs, nexp = None, 1
+        self.outputs = _names(outputs, int(i.nout) // nexp, "outputs")
+        self.model = meta.get("model") if outputs is not None else None
+        q = meta.get("quantities") if outputs is not None else None
+        self.quantities = None if q is None else tuple(q)
+        if nexp > 1:
+            self.nexp = nexp
 
     def __call__(self, r, theta, phi):
         return self._evaluate(r, theta, phi)
@@ -419,15 +537,20 @@ class Model(_Evaluator):
     lmin, lmax, mmax : degree range and maximum order (mmax defaults to lmax)
     functionals : list of Functional
     a : reference radius (same unit as r)
-    rmin, rmax : radial range of the evaluation points (required by the fast method)
+    rmin, rmax : radial range of the evaluation points (required by the fast method;
+           default: none, i.e. direct method only)
+    names : names of the functionals (default f0, f1, ...), as model.outputs
     """ + OPTIONS_DOC + """
     Calling the model with (r, theta, phi) returns an array of shape
     (len(functionals),) + broadcast shape of the inputs; rows(r, theta, phi) returns the
     same values with shape (broadcast shape) + (len(functionals),).
     """
 
-    def __init__(self, coef, lmin, lmax, functionals, a, rmin=0.0, rmax=0.0, mmax=None, **options):
+    def __init__(self, coef, lmin, lmax, functionals, a, rmin=None, rmax=None, mmax=None, names=None,
+                 **options):
+        names = _names(names, len(functionals), "functionals")
         coef, lmax, mmax = _coefficients(coef, lmin, lmax, mmax)
+        rmin, rmax = _range(rmin, rmax)
         p, chunk = _options(options)
 
         funcs = (_lib.Functional_t * len(functionals))()
@@ -446,6 +569,7 @@ class Model(_Evaluator):
         if not ptr:
             _raise(_lib.POTSYNTH_EINVAL, "potsynth_alloc")
         super().__init__(ptr, len(functionals), chunk)
+        self.outputs = names
 
     def __call__(self, r, theta, phi):
         return self._evaluate(r, theta, phi)
@@ -499,18 +623,25 @@ class SetsModel(_Evaluator):
     lmin, lmax, mmax : degree range and maximum order (lmax from nlm if None; mmax
            defaults to lmax)
     outputs : list of Output
-    a : reference radius (same unit as r); not used with radial functions
+    a : reference radius (same unit as r); required unless radial functions are given
+           (then not used)
     rmin, rmax : radial range of the evaluation points (required by the fast method;
            default with radial functions: their range)
     radial : radial functions of the caller (Radial), in place of the powers of a/r,
            or None
+    names : names of the outputs (default f0, f1, ...), as model.outputs
     """ + OPTIONS_DOC + """
     Calling the model with (r, theta, phi) returns an array of shape
     (len(outputs),) + broadcast shape of the inputs; rows() as for Model.
     """
 
-    def __init__(self, coef, lmin, lmax, outputs, a=1.0, rmin=None, rmax=None, mmax=None, radial=None,
-                 **options):
+    def __init__(self, coef, lmin, lmax, outputs, a=None, rmin=None, rmax=None, mmax=None, radial=None,
+                 names=None, **options):
+        names = _names(names, len(outputs), "outputs")
+        if a is None:
+            if radial is None:
+                raise ValueError("the reference radius a is required without radial functions")
+            a = 1.0
         coef = np.asarray(coef, dtype=float)
         if coef.ndim != 2:
             raise ValueError("coef must have shape (nset, nlm)")
@@ -523,8 +654,7 @@ class SetsModel(_Evaluator):
             rmax = radial.rmax if rmax is None else rmax
             if rmin is None or rmax is None:
                 raise ValueError("rmin and rmax must be given (here or in the Radial object)")
-        rmin = 0.0 if rmin is None else rmin
-        rmax = 0.0 if rmax is None else rmax
+        rmin, rmax = _range(rmin, rmax)
 
         self._radial = radial              # keeps the C structures of the radial functions alive
         self._rfac = []
@@ -558,6 +688,7 @@ class SetsModel(_Evaluator):
             _raise_radial(radial, _lib.POTSYNTH_EINVAL, "potsynth_alloc_sets")
         super().__init__(ptr, len(outputs), chunk, needs_r=not (radial is not None and radial.n == 1 and
                                                                 radial._sphere))
+        self.outputs = names
 
     def __call__(self, r, theta, phi):
         return self._evaluate(r, theta, phi)

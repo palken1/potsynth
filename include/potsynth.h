@@ -49,6 +49,9 @@ extern "C" {
 #define POTSYNTH_VERSION_MAJOR       0
 #define POTSYNTH_VERSION_MINOR       1
 #define POTSYNTH_VERSION_PATCH       0
+/* layout of the public structs; raised when a struct changes, so that a program (or the
+   Python package) can refuse a library built from other headers (potsynth_abi()) */
+#define POTSYNTH_ABI                 1
 
 /* largest supported SH degree (double precision Holmes-Featherstone scaling) */
 #define POTSYNTH_LMAX                2800
@@ -100,8 +103,6 @@ typedef struct
   int dphi;             /* number of phi derivatives: 0 or 1 */
 } potsynth_functional;
 
-/* former name of potsynth_functional (deprecated) */
-typedef potsynth_functional potsynth_channel;
 
 /* one term of an output of a model with several coefficient sets (potsynth_alloc_sets()):
    fac * rfac[l] * T[Pbar_l^m] D[C_lm cos(m phi) + S_lm sin(m phi)] with the coefficients of one set */
@@ -167,6 +168,7 @@ typedef struct
   double theta_max;     /* largest colatitude of the evaluation points (radians); 0 = pi (default).
                            The fast method stores only the grid rows of this range, and points
                            outside of it are a domain error; ignored by the direct method */
+  double reserved[8];   /* zero (potsynth_default_parameters()); room for later parameters */
 } potsynth_parameters;
 
 typedef struct
@@ -194,6 +196,7 @@ typedef struct
                            sum, relative to the size of each component (at most eps when the
                            check passed); -1 if there was no check (window width given, or a
                            model read from a file) */
+  double reserved[8];   /* zero; room for later fields */
 } potsynth_info;
 
 /*
@@ -219,6 +222,8 @@ typedef void potsynth_error_handler_t(const char * reason, const char * file, in
 POTSYNTH_API potsynth_error_handler_t * potsynth_set_error_handler(potsynth_error_handler_t * new_handler);
 POTSYNTH_API potsynth_error_handler_t * potsynth_set_error_handler_off(void);
 POTSYNTH_API const char * potsynth_strerror(const int potsynth_errno);
+POTSYNTH_API const char * potsynth_version(void);
+POTSYNTH_API int potsynth_abi(void);
 
 /* setup.c */
 POTSYNTH_API potsynth_parameters potsynth_default_parameters(void);
@@ -252,6 +257,7 @@ POTSYNTH_API int potsynth_cpu_avx2_fma(void);
 /* eval.c */
 POTSYNTH_API potsynth_eval_workspace * potsynth_eval_alloc(const size_t chunk, const potsynth_workspace * w);
 POTSYNTH_API void potsynth_eval_free(potsynth_eval_workspace * ew);
+POTSYNTH_API int potsynth_eval_set_threads(potsynth_eval_workspace * ew, const int nthreads);
 POTSYNTH_API int potsynth_eval(const size_t n, const double * r, const double * theta, const double * phi,
                                double * out, potsynth_eval_workspace * ew);
 POTSYNTH_API int potsynth_eval_rows(const size_t n, const double * r, const double * theta, const double * phi,

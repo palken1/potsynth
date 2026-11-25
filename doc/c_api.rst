@@ -87,6 +87,17 @@ to ``stderr`` and lets the function return.
 
    Returns a short description of an error code.
 
+.. c:function:: const char * potsynth_version(void)
+
+   Returns the version of the library, ``"major.minor.patch"``.
+
+.. c:function:: int potsynth_abi(void)
+
+   Returns the layout of the public structs the library was built with. A program can
+   compare it with the ``POTSYNTH_ABI`` of the headers it was compiled with, and refuse a
+   library built from other headers. The Python package does this, with the version,
+   when it is imported.
+
 The error codes are:
 
 .. c:macro:: POTSYNTH_SUCCESS
@@ -318,9 +329,10 @@ core field models are of low degree, where a direct sum is already fast.
       :c:macro:`potsynth_idx` ``(l, m, lmin, mmax)``, ready for
       :c:func:`potsynth_mag_alloc`
 
-.. c:function:: potsynth_shc * potsynth_shc_read(const char * filename)
+.. c:function:: potsynth_shc * potsynth_shc_read(const char * filename, const size_t lmax)
 
-   Reads a static model from an SHC file. All coefficients for
+   Reads a static model from an SHC file, truncated at degree ``lmax`` (0 for all
+   degrees of the file). All coefficients of the file, for
    :math:`l_{min} \le l \le l_{max}`, :math:`|m| \le l` must be present exactly once.
    Malformed files are reported to the error handler with the line number. Problems
    detected include a missing header or epoch, out-of-range or duplicate entries,
@@ -333,7 +345,7 @@ core field models are of low degree, where a direct sum is already fast.
 
    Frees a model read by :c:func:`potsynth_shc_read`. A NULL pointer is ignored.
 
-.. c:function:: potsynth_workspace * potsynth_mag_alloc_shc(const char * filename, const double a, const double rmin, const double rmax, const int quantities, const potsynth_parameters * params)
+.. c:function:: potsynth_workspace * potsynth_mag_alloc_shc(const char * filename, const size_t lmax, const double a, const double rmin, const double rmax, const int quantities, const potsynth_parameters * params)
 
    Reads an SHC file and builds the magnetic field model, as
    :c:func:`potsynth_mag_alloc`.
@@ -562,7 +574,6 @@ Generic core
 .. c:struct:: potsynth_functional
 
    One functional, as in :eq:`functional`.
-   ``potsynth_channel`` is its former name, kept as a deprecated alias.
 
    .. c:member:: int rpow
 
@@ -914,8 +925,8 @@ gives every field.
    potsynth_workspace * w;
    potsynth_eval_workspace * ew;
 
-   w = potsynth_vsh_alloc(1, lmax, lmax, nexp, a, b, c, POTSYNTH_VSH_NORM_SCHMIDT,
-                          POTSYNTH_VSH_V, rmin, rmax, &radial, NULL);
+   w = potsynth_vsh_alloc(1, lmax, lmax, nexp, a, b, c, POTSYNTH_VSH_NORM_SCHMIDT, rmin, rmax, &radial,
+                          POTSYNTH_VSH_V, NULL);
    ew = potsynth_eval_alloc(0, w);
 
    status = potsynth_eval(n, r, theta, phi, V, ew);   /* V: 3*nexp*n doubles */
@@ -967,7 +978,7 @@ own, which is far more accurate than differencing the evaluated field (see
    Number of outputs per point of each field: 1 for the radial component, 2 for the
    horizontal components, 1 each for the divergence and the curl.
 
-.. c:function:: potsynth_workspace * potsynth_vsh_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const size_t nexp, const double * a, const double * b, const double * c, const int norm, const int quantities, const double rmin, const double rmax, const potsynth_radial * radial, const potsynth_parameters * params)
+.. c:function:: potsynth_workspace * potsynth_vsh_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const size_t nexp, const double * a, const double * b, const double * c, const int norm, const double rmin, const double rmax, const potsynth_radial * radial, const int quantities, const potsynth_parameters * params)
 
    Builds a model of ``nexp`` fields.
 
@@ -978,12 +989,12 @@ own, which is far more accurate than differencing the evaluated field (see
    :param b: coefficients of :math:`\boldsymbol\Psi_{lm}`, as ``a``; or ``NULL``
    :param c: coefficients of :math:`\boldsymbol\Phi_{lm}`, as ``a``; or ``NULL``
    :param norm: normalization of the coefficients
-   :param quantities: quantities to compute
    :param rmin: smallest radius of the evaluation points, within the range of the
       radial functions; not used without radial functions
    :param rmax: largest radius of the evaluation points, as ``rmin``
    :param radial: radial functions, or ``NULL`` for fields on the sphere (the radii of
       the evaluation points may then be ``NULL``)
+   :param quantities: quantities to compute
    :param params: parameters, or ``NULL`` for the defaults. ``theta_min`` and
       ``theta_max`` restrict the grid to the colatitudes of the points
    :returns: the model, or ``NULL`` on error
@@ -1012,6 +1023,13 @@ Evaluation
 .. c:function:: void potsynth_eval_free(potsynth_eval_workspace * ew)
 
    Frees an evaluation workspace. A NULL pointer is ignored.
+
+.. c:function:: int potsynth_eval_set_threads(potsynth_eval_workspace * ew, const int nthreads)
+
+   Sets the number of OpenMP threads of the evaluations with ``ew``; 0 means those of the
+   model. A program that evaluates one model from several threads of its own, each with
+   its own evaluation workspace, sets 1 here so that the threads are not multiplied. The
+   results do not depend on the number of threads.
 
 .. c:function:: int potsynth_eval(const size_t n, const double * r, const double * theta, const double * phi, double * out, potsynth_eval_workspace * ew)
 

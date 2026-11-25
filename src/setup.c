@@ -24,6 +24,7 @@ potsynth_default_parameters(void)
 {
   potsynth_parameters params;
 
+  memset(&params, 0, sizeof(params)); /* reserved fields too */
   params.eps = 1.0e-10;
   params.method = POTSYNTH_METHOD_AUTO;
   params.sigma = 0.0;

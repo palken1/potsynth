@@ -59,8 +59,8 @@ test_robust(void)
     char name[1024];
 
     test_io_name(name, sizeof(name));
-    w1 = potsynth_vsh_alloc(1, L, L, 1, a1, NULL, NULL, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_VR, 0.0, 0.0,
-                            NULL, &params);
+    w1 = potsynth_vsh_alloc(1, L, L, 1, a1, NULL, NULL, POTSYNTH_VSH_NORM_FULL, 0.0, 0.0, NULL,
+                            POTSYNTH_VSH_VR, &params);
     ps_test(w1 == NULL, "robust: VSH model on one sphere");
     if (w1)
       {
@@ -105,12 +105,36 @@ test_robust(void)
       potsynth_free(w);
     }
 
-  /* the former name of potsynth_functional still compiles */
-  {
-    potsynth_channel old = { 0, NULL, POTSYNTH_THETA_P, 0 };
-    potsynth_functional * f = &old;
-    ps_test(f->theta != POTSYNTH_THETA_P, "robust: potsynth_channel is potsynth_functional");
-  }
+  /* version and layout, and the threads of an evaluation workspace: same results for 1
+   * thread, the model's, and more than the model was set up with */
+  ps_test(strcmp(potsynth_version(), "0.1.0") != 0, "robust: version string");
+  ps_test_int(potsynth_abi(), POTSYNTH_ABI, "robust: ABI of the library and the headers");
+  params.nthreads = 2;
+  w = potsynth_mag_alloc(1, L, L, gh, a, rmin, rmax, POTSYNTH_MAG_B, &params);
+  params.nthreads = 0;
+  if (w)
+    {
+      const size_t n = 3000;
+      double * rr = malloc(n * sizeof(double)), * tt = malloc(n * sizeof(double)), * pp = malloc(n * sizeof(double));
+      double * o1 = malloc(3 * n * sizeof(double)), * o2 = malloc(3 * n * sizeof(double));
+      potsynth_eval_workspace * ew = potsynth_eval_alloc(0, w);
+      int nt[3] = { 1, 0, 6 }, k;
+
+      test_random_points(n, rmin, rmax, rr, tt, pp);
+      ps_test_int(potsynth_eval(n, rr, tt, pp, o1, ew), POTSYNTH_SUCCESS, "robust: eval with the model's threads");
+      for (k = 0; k < 3; ++k)
+        {
+          ps_test_int(potsynth_eval_set_threads(ew, nt[k]), POTSYNTH_SUCCESS, "robust: set %d threads", nt[k]);
+          ps_test_int(potsynth_eval(n, rr, tt, pp, o2, ew), POTSYNTH_SUCCESS, "robust: eval with %d threads", nt[k]);
+          ps_test(memcmp(o1, o2, 3 * n * sizeof(double)) != 0, "robust: same values with %d threads", nt[k]);
+        }
+      test_last_error();
+      ps_test_int(potsynth_eval_set_threads(ew, -1), POTSYNTH_EINVAL, "robust: negative threads refused");
+      test_last_error();
+      potsynth_eval_free(ew);
+      potsynth_free(w);
+      free(rr); free(tt); free(pp); free(o1); free(o2);
+    }
 
   /* the free functions accept NULL, as free() does */
   potsynth_free(NULL);
@@ -190,11 +214,11 @@ test_robust(void)
     potsynth_workspace * wf, * wdv;
 
     params.eps = 1e-8;
-    wf = potsynth_vsh_alloc(1, Lv, Lv, nexp, av, bv, cv, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_V, rmin, rmax,
-                            NULL, &params);
+    wf = potsynth_vsh_alloc(1, Lv, Lv, nexp, av, bv, cv, POTSYNTH_VSH_NORM_FULL, rmin, rmax, NULL,
+                            POTSYNTH_VSH_V, &params);
     params.method = POTSYNTH_METHOD_DIRECT;
-    wdv = potsynth_vsh_alloc(1, Lv, Lv, nexp, av, bv, cv, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_V, rmin, rmax,
-                             NULL, &params);
+    wdv = potsynth_vsh_alloc(1, Lv, Lv, nexp, av, bv, cv, POTSYNTH_VSH_NORM_FULL, rmin, rmax, NULL,
+                             POTSYNTH_VSH_V, &params);
     params.method = POTSYNTH_METHOD_FAST;
     ps_test(wf == NULL || wdv == NULL, "robust: model with 24 functionals");
     if (wf && wdv)
@@ -374,8 +398,8 @@ test_robust(void)
         params.method = meth ? POTSYNTH_METHOD_DIRECT : POTSYNTH_METHOD_FAST;
         params.nthreads = 1;
         fail.calls = -1;
-        w = potsynth_vsh_alloc(1, L, L, 1, abc, NULL, NULL, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_V,
-                               rn[0], rn[3], &rad, &params);
+        w = potsynth_vsh_alloc(1, L, L, 1, abc, NULL, NULL, POTSYNTH_VSH_NORM_FULL, rn[0], rn[3], &rad,
+                               POTSYNTH_VSH_V, &params);
         ps_test(w == NULL, "robust: %s model with radial functions", desc);
         if (w == NULL)
           continue;

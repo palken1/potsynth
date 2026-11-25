@@ -212,7 +212,8 @@ struct potsynth_eval_workspace
   size_t * count;       /* counting sort bins, length nbins+1 */
   size_t nbins;         /* number of sort bins */
 
-  double * tscratch;    /* per-thread scratch space, nthreads * tstride */
+  int nalloc;           /* threads the scratch space is allocated for (>= nthreads) */
+  double * tscratch;    /* per-thread scratch space, nalloc * tstride */
   size_t tstride;       /* doubles of scratch per thread */
   double * rscratch;    /* radial functions of the caller at a point (validation), length nrad, or NULL */
   double * oscratch;    /* functional values of a point for the output map, nthreads * nfunc, or NULL */

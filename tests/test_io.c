@@ -119,8 +119,8 @@ test_io(void)
   params.theta_min = 0.4;
   params.theta_max = 2.9;
   test_io_roundtrip("vector fields with radial functions",
-                    potsynth_vsh_alloc(1, L, L, 2, abc, abc, NULL, POTSYNTH_VSH_NORM_SCHMIDT,
-                                       POTSYNTH_VSH_V | POTSYNTH_VSH_DIV, rn[0], rn[3], &rad, &params),
+                    potsynth_vsh_alloc(1, L, L, 2, abc, abc, NULL, POTSYNTH_VSH_NORM_SCHMIDT, rn[0], rn[3],
+                                       &rad, POTSYNTH_VSH_V | POTSYNTH_VSH_DIV, &params),
                     &rad, rn[0], rn[3], 0.4, 2.9);
   params.theta_min = 0.0;
   params.theta_max = 0.0;
@@ -142,8 +142,8 @@ test_io(void)
 
     /* radial functions that do not match; a truncated file; a file of another kind */
     params.method = POTSYNTH_METHOD_FAST;
-    w = potsynth_vsh_alloc(1, L, L, 1, abc, NULL, NULL, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_V,
-                           rn[0], rn[3], &rad, &params);
+    w = potsynth_vsh_alloc(1, L, L, 1, abc, NULL, NULL, POTSYNTH_VSH_NORM_FULL, rn[0], rn[3], &rad,
+                           POTSYNTH_VSH_V, &params);
     ps_test(w == NULL, "io: allocation");
     if (w)
       {

@@ -60,11 +60,11 @@ Inputs: lmin       - minimum SH degree (>= 0)
         b          - coefficients of Psi, as a; or NULL for zero
         c          - coefficients of Phi, as a; or NULL for zero
         norm       - normalization of the coefficients (POTSYNTH_VSH_NORM_xxx)
-        quantities - quantities computed (POTSYNTH_VSH_xxx)
         rmin       - minimum radius of evaluation points (fast method)
         rmax       - maximum radius of evaluation points (fast method)
         radial     - radial functions f_j, or NULL: fields on the sphere (rmin and rmax
                      are then not used, and the radii of the points may be NULL)
+        quantities - quantities computed (POTSYNTH_VSH_xxx)
         params     - parameters, or NULL for defaults
 
 Return: pointer to workspace, or NULL on error; evaluate it with potsynth_eval()
@@ -85,8 +85,8 @@ and of the curl
 potsynth_workspace *
 potsynth_vsh_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const size_t nexp,
                    const double * a, const double * b, const double * c,
-                   const int norm, const int quantities,
-                   const double rmin, const double rmax, const potsynth_radial * radial,
+                   const int norm, const double rmin, const double rmax,
+                   const potsynth_radial * radial, const int quantities,
                    const potsynth_parameters * params)
 {
   const size_t nq = potsynth_vsh_nout(quantities);

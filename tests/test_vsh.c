@@ -131,7 +131,7 @@ test_vsh_field(const char * desc, const size_t lmin, const size_t lmax, const si
   params.method = method;
   params.eps = eps;
   w = potsynth_vsh_alloc(lmin, lmax, mmax, nexp, (have & 1) ? abc[0] : NULL, (have & 2) ? abc[1] : NULL,
-                         (have & 4) ? abc[2] : NULL, norm, quantities, 0.0, 0.0, NULL, &params);
+                         (have & 4) ? abc[2] : NULL, norm, 0.0, 0.0, NULL, quantities, &params);
   ps_test(w == NULL, "vsh: %s allocation", desc);
 
   if (w)
@@ -227,7 +227,7 @@ test_vsh_signs(void)
   test_vsh_single(1, L, L, c, 1, ch_p, 5 * n, theta, phi, sc);
 
   params.method = POTSYNTH_METHOD_DIRECT;
-  w = potsynth_vsh_alloc(1, L, L, 1, NULL, b, c, POTSYNTH_VSH_NORM_FULL, quantities, 0.0, 0.0, NULL, &params);
+  w = potsynth_vsh_alloc(1, L, L, 1, NULL, b, c, POTSYNTH_VSH_NORM_FULL, 0.0, 0.0, NULL, quantities, &params);
   ps_test(w == NULL, "vsh: signs allocation");
 
   if (w)
@@ -415,10 +415,10 @@ test_vsh_shell(const char * desc, potsynth_radial_fn * radial, const size_t nper
 
   params.method = method;
   params.eps = 1.0e-11;
-  w0 = potsynth_vsh_alloc(lmin, lmax, mmax, 1, abc0[0], abc0[1], abc0[2], POTSYNTH_VSH_NORM_SCHMIDT,
-                          POTSYNTH_VSH_V, 0.0, 0.0, NULL, &params);
-  w = potsynth_vsh_alloc(lmin, lmax, mmax, 1, abc[0], abc[1], abc[2], POTSYNTH_VSH_NORM_SCHMIDT,
-                         POTSYNTH_VSH_V, rn[0], rn[3], &rad, &params);
+  w0 = potsynth_vsh_alloc(lmin, lmax, mmax, 1, abc0[0], abc0[1], abc0[2], POTSYNTH_VSH_NORM_SCHMIDT, 0.0, 0.0,
+                          NULL, POTSYNTH_VSH_V, &params);
+  w = potsynth_vsh_alloc(lmin, lmax, mmax, 1, abc[0], abc[1], abc[2], POTSYNTH_VSH_NORM_SCHMIDT, rn[0], rn[3],
+                         &rad, POTSYNTH_VSH_V, &params);
   ps_test(w0 == NULL || w == NULL, "vsh: %s allocation", desc);
 
   if (w0 && w)
@@ -520,24 +520,29 @@ test_vsh_errors(void)
 
   ps_test_int((int) potsynth_vsh_nout(POTSYNTH_VSH_V | POTSYNTH_VSH_CURL), 4, "vsh: number of outputs");
 
-  ps_test(potsynth_vsh_alloc(1, L, L, 0, a, a, a, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_V, 0.0, 0.0, NULL, &params) != NULL,
+  ps_test(potsynth_vsh_alloc(1, L, L, 0, a, a, a, POTSYNTH_VSH_NORM_FULL, 0.0, 0.0, NULL, POTSYNTH_VSH_V,
+                             &params) != NULL,
           "vsh: nexp = 0 rejected");
   ps_test_int(test_last_error(), POTSYNTH_EINVAL, "vsh: nexp = 0 error code");
-  ps_test(potsynth_vsh_alloc(1, L, L, 1, NULL, NULL, NULL, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_V, 0.0, 0.0, NULL, &params) != NULL,
+  ps_test(potsynth_vsh_alloc(1, L, L, 1, NULL, NULL, NULL, POTSYNTH_VSH_NORM_FULL, 0.0, 0.0, NULL,
+                             POTSYNTH_VSH_V, &params) != NULL,
           "vsh: no coefficients rejected");
-  ps_test(potsynth_vsh_alloc(1, L, L, 1, a, a, a, POTSYNTH_VSH_NORM_FULL, 0, 0.0, 0.0, NULL, &params) != NULL,
+  ps_test(potsynth_vsh_alloc(1, L, L, 1, a, a, a, POTSYNTH_VSH_NORM_FULL, 0.0, 0.0, NULL, 0, &params) != NULL,
           "vsh: no quantities rejected");
-  ps_test(potsynth_vsh_alloc(1, L, L, 1, a, a, a, 7, POTSYNTH_VSH_V, 0.0, 0.0, NULL, &params) != NULL,
+  ps_test(potsynth_vsh_alloc(1, L, L, 1, a, a, a, 7, 0.0, 0.0, NULL, POTSYNTH_VSH_V, &params) != NULL,
           "vsh: invalid normalization rejected");
-  ps_test(potsynth_vsh_alloc(1, L, L, 1, a, a, a, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_V, 1.0, 1.0, &norad, &params) != NULL,
+  ps_test(potsynth_vsh_alloc(1, L, L, 1, a, a, a, POTSYNTH_VSH_NORM_FULL, 1.0, 1.0, &norad, POTSYNTH_VSH_V,
+                             &params) != NULL,
           "vsh: two radial functions without a function rejected");
-  ps_test(potsynth_vsh_alloc(1, L, L + 1, 1, a, a, a, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_V, 0.0, 0.0, NULL, &params) != NULL,
+  ps_test(potsynth_vsh_alloc(1, L, L + 1, 1, a, a, a, POTSYNTH_VSH_NORM_FULL, 0.0, 0.0, NULL, POTSYNTH_VSH_V,
+                             &params) != NULL,
           "vsh: mmax > lmax rejected");
   test_last_error();
 
   /* polar cap */
   params.theta_max = 0.5;
-  w = potsynth_vsh_alloc(1, L, L, 2, a, NULL, a, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_V, 0.0, 0.0, NULL, &params);
+  w = potsynth_vsh_alloc(1, L, L, 2, a, NULL, a, POTSYNTH_VSH_NORM_FULL, 0.0, 0.0, NULL, POTSYNTH_VSH_V,
+                         &params);
   ps_test(w == NULL, "vsh: polar cap allocation");
 
   if (w)
@@ -597,11 +602,11 @@ test_vsh_many(const size_t L, const size_t nexp)
 
   params.eps = 1.0e-10;
   params.method = POTSYNTH_METHOD_FAST;
-  wf = potsynth_vsh_alloc(1, L, L, nexp, abc[0], abc[1], abc[2], POTSYNTH_VSH_NORM_SCHMIDT, POTSYNTH_VSH_V,
-                          0.0, 0.0, NULL, &params);
+  wf = potsynth_vsh_alloc(1, L, L, nexp, abc[0], abc[1], abc[2], POTSYNTH_VSH_NORM_SCHMIDT, 0.0, 0.0, NULL,
+                          POTSYNTH_VSH_V, &params);
   params.method = POTSYNTH_METHOD_DIRECT;
-  wd = potsynth_vsh_alloc(1, L, L, nexp, abc[0], abc[1], abc[2], POTSYNTH_VSH_NORM_SCHMIDT, POTSYNTH_VSH_V,
-                          0.0, 0.0, NULL, &params);
+  wd = potsynth_vsh_alloc(1, L, L, nexp, abc[0], abc[1], abc[2], POTSYNTH_VSH_NORM_SCHMIDT, 0.0, 0.0, NULL,
+                          POTSYNTH_VSH_V, &params);
   ps_test(wf == NULL || wd == NULL, "vsh: %zu fields allocation", nexp);
 
   if (wf && wd)
@@ -688,7 +693,8 @@ test_vsh_parts(void)
 
   test_random_points(n, 1.0, 1.0, r, theta, phi);
   params.method = POTSYNTH_METHOD_DIRECT;
-  wv = potsynth_vsh_alloc(1, L, L, nexp, a, b, c, POTSYNTH_VSH_NORM_SCHMIDT, POTSYNTH_VSH_V, 0.0, 0.0, NULL, &params);
+  wv = potsynth_vsh_alloc(1, L, L, nexp, a, b, c, POTSYNTH_VSH_NORM_SCHMIDT, 0.0, 0.0, NULL, POTSYNTH_VSH_V,
+                          &params);
   ps_test(wv == NULL, "vsh: parts allocation");
 
   if (wv)
@@ -699,8 +705,8 @@ test_vsh_parts(void)
 
       for (k = 0; k < 3; ++k)
         {
-          potsynth_workspace * wp = potsynth_vsh_alloc(1, L, L, nexp, a, b, c, POTSYNTH_VSH_NORM_SCHMIDT, quant[k],
-                                                       0.0, 0.0, NULL, &params);
+          potsynth_workspace * wp = potsynth_vsh_alloc(1, L, L, nexp, a, b, c, POTSYNTH_VSH_NORM_SCHMIDT, 0.0,
+                                                       0.0, NULL, quant[k], &params);
 
           ps_test(wp == NULL || potsynth_vsh_nout(quant[k]) != nq[k], "vsh: part %zu allocation", k);
 

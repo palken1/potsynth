@@ -11,7 +11,7 @@ import numpy as np
 
 from . import _lib
 from ._lib import lib
-from .core import OPTIONS_DOC, _coefficients, _Evaluator, _options, _raise, nlm
+from .core import OPTIONS_DOC, _coefficients, _Evaluator, _options, _quantity_list, _raise, _range, nlm
 
 MAG_B = 0x1
 MAG_GRADB = 0x2
@@ -47,13 +47,15 @@ class ShcModel:
     gh: np.ndarray
 
 
-def read_shc(filename):
+def read_shc(filename, lmax=0):
     """Read a static model (one epoch, e.g. a lithospheric model) from a Swarm SHC file.
+
+    lmax truncates the model (0 = all degrees of the file).
 
     Time-dependent SHC files are not supported (core field models are of low degree
     and are best evaluated with a direct sum). Returns a ShcModel."""
     _lib.clear_error()
-    ptr = lib.potsynth_shc_read(os.fsencode(filename))
+    ptr = lib.potsynth_shc_read(os.fsencode(filename), lmax)
     if not ptr:
         _raise(_lib.POTSYNTH_EINVAL, "potsynth_shc_read")
     try:
@@ -84,13 +86,15 @@ class MagModel(_Evaluator):
     Calling the model with (r [km], theta [rad, colatitude], phi [rad]) returns a named
     tuple with the requested quantities, in the order B_r, B_theta, B_phi (nT), then
     dB_rr, dB_rt, dB_rp, dB_tt, dB_tp, dB_pp (nT/km), each with the broadcast shape of
-    the inputs.
+    the inputs. model.outputs names them, and model.quantities holds the requested
+    quantities.
     """
 
-    def __init__(self, gh, lmax=None, lmin=1, mmax=None, a=6371.2, rmin=0.0, rmax=0.0, quantities="B",
+    def __init__(self, gh, lmax=None, lmin=1, mmax=None, a=6371.2, rmin=None, rmax=None, quantities="B",
                  **options):
         flags, names = _mag_flags(quantities)
         gh, lmax, mmax = _coefficients(gh, lmin, lmax, mmax, "gh")
+        rmin, rmax = _range(rmin, rmax)
         p, chunk = _options(options)
 
         _lib.clear_error()
@@ -99,14 +103,15 @@ class MagModel(_Evaluator):
         if not ptr:
             _raise(_lib.POTSYNTH_EINVAL, "potsynth_mag_alloc")
         super().__init__(ptr, len(names), chunk)
-        self.quantities = tuple(names)
+        self.outputs = tuple(names)
+        self.quantities = _quantity_list(quantities)
         self._result = collections.namedtuple("MagField", names)
 
     @classmethod
-    def from_shc(cls, filename, a=6371.2, rmin=0.0, rmax=0.0, **kwargs):
-        """Build a model from a static Swarm SHC file (see read_shc()); the other
-        arguments are as for MagModel."""
-        shc = read_shc(filename)
+    def from_shc(cls, filename, lmax=0, a=6371.2, rmin=None, rmax=None, **kwargs):
+        """Build a model from a static Swarm SHC file (see read_shc()); lmax truncates
+        the model (0 = all degrees). The other arguments are as for MagModel."""
+        shc = read_shc(filename, lmax)
         return cls(shc.gh, lmax=shc.lmax, lmin=shc.lmin, mmax=shc.mmax, a=a, rmin=rmin, rmax=rmax,
                    **kwargs)
 
