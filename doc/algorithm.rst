@@ -68,8 +68,11 @@ where :math:`[b]` and :math:`[c]` stand for the brackets of :eq:`channel` with t
 coefficients of each set. The steps below apply unchanged: each term is accumulated
 with the coefficients of its own set, the reflection of each term under
 :math:`\theta \to \pi - \theta` follows its own operator (step 2), and the weights that
-control the accuracy of a component are summed over its sets. All quantities of all
-sets share one grid, so one window sum gives them all.
+control the accuracy of a component are summed over its sets: in each channel the
+terms with the same operator are added with their coefficients before squaring, and
+other terms add in power, so that sets which nearly cancel (the difference of two
+epochs, say) get the radial basis and window of their sum. All quantities of all sets
+share one grid, so one window sum gives them all.
 
 The radial dependence need not be a power of :math:`a/r` either. Step 1 below writes
 each quantity as :math:`\sum_i b_i(u)\, G_i(\theta,\phi)` with radial functions found
@@ -164,9 +167,10 @@ product. Each :math:`b_i` is stored as a Chebyshev series in
 :math:`t = (u-u_c)/u_d \in [-1,1]`, so evaluating all :math:`\rho` radial values at a
 point costs about :math:`\rho K` operations.
 
-For a satellite shell (250--800 km), :math:`\rho = 7` gives :math:`10^{-6}` for the
-magnetic field of LCS-1 and :math:`\rho = 10` gives :math:`10^{-13}`; EGM2008 to degree
-2190 needs 9--13 on the same shell. Thicker shells need more radial functions:
+For a satellite shell (250--800 km), :math:`\rho = 10` gives :math:`10^{-6}` for the
+magnetic field of LCS-1 and :math:`\rho = 15` gives :math:`10^{-13}`; the acceleration of
+EGM2008 to degree 2190 needs 9--13 for :math:`10^{-6}` to :math:`10^{-10}` on the same
+shell, and 32 on 0--2000 km at :math:`10^{-10}`. Thicker shells need more radial functions:
 :math:`r \in [a, 2a]` needs :math:`\rho = 27` at :math:`10^{-14}` for LCS-1. When
 :math:`r_{\min} = r_{\max}` a single constant function is used.
 

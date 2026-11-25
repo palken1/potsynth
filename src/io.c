@@ -28,6 +28,7 @@
 
 #define IO_MAGIC                     "PSYNTHW1"
 #define IO_BOM                       UINT64_C(0x0102030405060708)
+#define IO_MAXIDX                    (1L << 40) /* bound on grid row and column indices */
 #define NHEAD_U                      17
 #define NHEAD_I                      4
 #define NHEAD_D                      15
@@ -98,6 +99,17 @@ potsynth_write(const char * filename, const potsynth_workspace * w)
     }
 }
 
+/* *p = a * b; 0 if the product overflows */
+static int
+io_mul(const size_t a, const size_t b, size_t * p)
+{
+  if (b != 0 && a > SIZE_MAX / b)
+    return 0;
+
+  *p = a * b;
+  return 1;
+}
+
 /*
 potsynth_read()
   Read a model written by potsynth_write()
@@ -121,7 +133,7 @@ potsynth_read(const char * filename, const potsynth_radial * radial, const int n
   uint64_t bom = 0, hu[NHEAD_U];
   int64_t hi[NHEAD_I];
   double hd[NHEAD_D];
-  size_t ngrid, nbasis;
+  size_t ngrid = 0, nbasis = 0, nbytes = 0;
   int ok;
 
   if (filename == NULL || nthreads < 0)
@@ -164,6 +176,8 @@ potsynth_read(const char * filename, const potsynth_radial * radial, const int n
     }
 
   w->radial_workspace_p = rad;
+  w->check_err = -1.0; /* not stored in the file */
+  rad->err = -1.0;
   w->params = potsynth_default_parameters();
   w->method = POTSYNTH_METHOD_FAST;
   w->nthreads = potsynth_max_threads(nthreads);
@@ -216,12 +230,24 @@ potsynth_read(const char * filename, const potsynth_radial * radial, const int n
       w->rfn_params = radial->params;
     }
 
-  /* sizes that the header must satisfy before anything is allocated from it */
-  nbasis = rad->rho * rad->ncheb;
-  ngrid = w->nrows * w->ncols * w->nchp;
-  ok = (w->nchan > 0 && rad->rho > 0 && rad->ncheb > 0 && w->nch == w->nchan * rad->rho &&
+  /* sizes that the header must satisfy before anything is allocated from it: the
+   * products must not overflow, the window must fit in the stored rows and columns
+   * (window_origin() clamps to them), and a model with radial functions of the caller
+   * has one layer per function */
+  ok = (w->nchan > 0 && rad->rho > 0 && rad->ncheb > 0 && w->lmin <= w->lmax && w->mmax <= w->lmax &&
+        io_mul(rad->rho, rad->ncheb, &nbasis) && io_mul(nbasis, sizeof(double), &nbytes) &&
+        io_mul(w->nrows, w->ncols, &ngrid) && io_mul(ngrid, w->nchp, &ngrid) &&
+        io_mul(ngrid, sizeof(double), &nbytes) &&
+        io_mul(w->nchan, rad->rho, &nbytes) && w->nch == nbytes &&
+        io_mul(w->nout, w->nchan, &nbytes) && io_mul(nbytes, sizeof(double), &nbytes) &&
         w->nchp >= w->nch && w->nchp % POTSYNTH_CHAN_ALIGN == 0 && w->w >= 2 && w->w <= 32 &&
+        labs(w->row_lo) < IO_MAXIDX && labs(w->row_hi) < IO_MAXIDX &&
+        labs(w->col_lo) < IO_MAXIDX && labs(w->col_hi) < IO_MAXIDX &&
+        w->row_lo <= w->row_hi && w->col_lo <= w->col_hi &&
         w->nrows == (size_t) (w->row_hi - w->row_lo + 1) && w->ncols == (size_t) (w->col_hi - w->col_lo + 1) &&
+        w->nrows >= (size_t) w->w && w->ncols >= (size_t) w->w &&
+        isfinite(w->inv_h1) && isfinite(w->inv_h2) && isfinite(w->half) &&
+        (w->nrad == 0 || (rad->rho == w->nrad && rad->ncheb == 1)) &&
         w->nout >= w->nchan && w->nout <= 2 * w->nchan &&
         (hu[16] || w->nout == w->nchan));
 

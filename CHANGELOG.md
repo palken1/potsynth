@@ -29,7 +29,8 @@ First public release.
   root mean square: by the addition theorem a degree-l part is at most sqrt(2l+1) times
   its rms anywhere. The rank and the Chebyshev degree are chosen with this bound within
   eps/2 (default `rank_tol`, was 0.1 eps), checked between the radial nodes too, with
-  rounding-floor tests at high accuracy. This fixes errors of up to 50 eps for EGM2008
+  rounding-floor tests at high accuracy (applied only near the rounding level, so that
+  thick shells at high degree, e.g. EGM2008 on 0-2000 km, get their full rank). This fixes errors of up to 50 eps for EGM2008
   on Earth's topographic surface (shells reaching inside r = a); satellite shells need
   one or two more radial functions.
 - Window width chosen per quantity and shell: the table measured for the magnetic field
@@ -60,6 +61,19 @@ First public release.
 - The window check after the set-up tests each component against a direct sum of its
   own channels, so its cost does not grow with the number of fields; the copy of the
   coefficients is freed after the set-up of a fast model.
+- `err_radial` and `err_check` in `potsynth_info`: the error bound of the radial basis
+  and the largest error of the window check after set-up, so that a tolerance below
+  the rounding floor (or a non-default `sigma`) no longer passes unnoticed.
+- In a model with several coefficient sets, the parts of a channel with the same
+  operator are combined before their power is taken, so that sets that nearly cancel
+  (e.g. the difference of two epochs) get the radial basis and window of their sum, not
+  of each set.
+- Robustness: `sigma` below 1 is rejected (it overflowed the grid); `potsynth_read`
+  checks the sizes in the file header (window inside the stored rows and columns, no
+  overflow); a radial function of the caller that fails after the points were validated
+  gives NaN for those points and an error, in C and Python (the exception of a Python
+  function is raised by the call in which it occurred); a window check that cannot be
+  made fails the set-up instead of passing it.
 - Colatitude range of the evaluation points (`theta_min`, `theta_max` of the
   parameters): the fast method stores only the grid rows of the range, with identical
   results; for data in a polar cap or a region.

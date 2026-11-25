@@ -39,6 +39,21 @@ def _raise(status, what):
     raise PotsynthError(status, what, reason)
 
 
+def _reset_radial(radial):
+    """Forget an exception of the radial functions from an earlier call."""
+    if radial is not None:
+        radial._error = None
+
+
+def _raise_radial(radial, status, what):
+    """Raise the exception that the caller's radial functions raised in this call, if
+    any (it cannot cross the C library), else the library error."""
+    if radial is not None and radial._error is not None:
+        error, radial._error = radial._error, None
+        raise error
+    _raise(status, what)
+
+
 def nlm(lmin, lmax, mmax=None):
     """Length of a coefficient vector for degrees lmin..lmax and orders up to mmax."""
     mmax = lmax if mmax is None else mmax
@@ -326,15 +341,13 @@ class _Evaluator:
         out = np.empty((n, self._nchan) if rows else (self._nchan, n))
         ptr = lambda a: None if a is None else a.ctypes.data_as(_lib.c_double_p)
         fn = lib.potsynth_eval_rows if rows else lib.potsynth_eval
+        radial = getattr(self, "_radial", None)
         with self._lock:
             _lib.clear_error()
+            _reset_radial(radial)
             status = fn(n, ptr(r), ptr(theta), ptr(phi), ptr(out), self._ew)
         if status:
-            radial = getattr(self, "_radial", None)
-            if radial is not None and radial._error is not None:
-                error, radial._error = radial._error, None
-                raise error
-            _raise(status, "potsynth_eval_rows" if rows else "potsynth_eval")
+            _raise_radial(radial, status, "potsynth_eval_rows" if rows else "potsynth_eval")
         return out.reshape(shape + (self._nchan,) if rows else (self._nchan,) + shape)
 
     def rows(self, r, theta, phi):
@@ -372,10 +385,11 @@ class LoadedModel(_Evaluator):
     def __init__(self, filename, radial=None, nthreads=0, chunk=0):
         self._radial = radial          # keeps the C structures of the radial functions alive
         _lib.clear_error()
+        _reset_radial(radial)
         ptr = lib.potsynth_read(os.fsencode(filename), None if radial is None else ctypes.byref(radial._c),
                                 nthreads)
         if not ptr:
-            _raise(_lib.POTSYNTH_EINVAL, "potsynth_read")
+            _raise_radial(radial, _lib.POTSYNTH_EINVAL, "potsynth_read")
         i = _lib.Info_t()
         lib.potsynth_get_info(ctypes.byref(i), ptr)
         # the radii may be omitted for a model without radial dependence; the library checks
@@ -530,11 +544,12 @@ class SetsModel(_Evaluator):
             outs[i].weight = o.weight
 
         _lib.clear_error()
+        _reset_radial(radial)
         ptr = lib.potsynth_alloc_sets(lmin, lmax, mmax, nset, coef.ctypes.data_as(_lib.c_double_p), a, rmin, rmax,
                                       None if radial is None else ctypes.byref(radial._c),
                                       len(outputs), outs, ctypes.byref(p))
         if not ptr:
-            _raise(_lib.POTSYNTH_EINVAL, "potsynth_alloc_sets")
+            _raise_radial(radial, _lib.POTSYNTH_EINVAL, "potsynth_alloc_sets")
         super().__init__(ptr, len(outputs), chunk, needs_r=not (radial is not None and radial.n == 1 and
                                                                 radial._sphere))
 

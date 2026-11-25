@@ -791,6 +791,84 @@ fast_row(const size_t row, double * R, const fast_state_t * state, potsynth_work
 }
 
 /*
+sets_msq()
+  Mean square over the sphere of the degree-l, order-m part of a quantity at
+r = a, for a model with several coefficient sets
+
+Inputs: w   - workspace
+        g   - quantity
+        grp - quantity of each channel
+        l   - degree
+        m   - order
+        idx - index of (l, m) in a coefficient set
+
+Notes:
+1) In each channel, the parts with the same theta and phi operator are summed
+with their coefficients before squaring, so that sets which cancel (e.g. the
+difference of two models) give the power of their sum; parts with different
+operators, and different channels, add in power. With radial functions of the
+caller, each function adds in power.
+*/
+
+static double
+sets_msq(const potsynth_workspace * w, const size_t g, const size_t * grp, const size_t l, const size_t m,
+         const size_t idx)
+{
+  const size_t L1 = w->lmax + 1;
+  const size_t nsetr = potsynth_nsetr(w);
+  double msq = 0.0;
+  size_t c, p, p2, j;
+
+  for (c = 0; c < w->nchan; ++c)
+    {
+      double wt;
+
+      if (grp[c] != g)
+        continue;
+
+      wt = potsynth_chan_weight(w, c);
+
+      for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
+        {
+          double q;
+          int first = 1;
+
+          /* the first part of the channel with this operator takes all of them */
+          for (p2 = w->pbase[c]; p2 < p && first; ++p2)
+            first = !(w->ptheta[p2] == w->ptheta[p] && w->pdphi[p2] == w->pdphi[p]);
+
+          if (!first)
+            continue;
+
+          q = potsynth_op_msq(w->ptheta[p], w->pdphi[p], l, m);
+          if (q == 0.0)
+            continue;
+
+          for (j = 0; j < nsetr; ++j)
+            {
+              double ac = 0.0, as = 0.0;
+
+              for (p2 = p; p2 < w->pbase[c + 1]; ++p2)
+                {
+                  if (w->ptheta[p2] == w->ptheta[p] && w->pdphi[p2] == w->pdphi[p])
+                    {
+                      const double rf = w->prfac[p2 * L1 + l];
+                      const size_t set = w->pset[p2] + j;
+
+                      ac += rf * w->C[set * w->nalf + idx];
+                      as += rf * w->S[set * w->nalf + idx];
+                    }
+                }
+
+              msq += wt * wt * q * (ac * ac + as * as);
+            }
+        }
+    }
+
+  return msq;
+}
+
+/*
 potsynth_radial_weights()
   Weights of the radial basis (step 1). Channels with the same radial power and
 field family (scalar, surface gradient, spin-2 tensor) form one quantity; its
@@ -875,6 +953,16 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
           for (m = 0; m <= M; ++m)
             {
               const size_t idx = potsynth_alf_idx(l, m, L);
+
+              if (w->nset > nsetr)
+                {
+                  /* several coefficient sets: parts of a channel with the same operator
+                     add coherently (sets that nearly cancel, such as the difference of
+                     two epochs, give a small weight); different operators and channels
+                     add in power */
+                  msq += sets_msq(w, g, grp, l, m, idx);
+                  continue;
+                }
 
               /* sum over the sets of (power of the set) x (sum over its parts) */
               for (i = 0; i < np; i = s)
@@ -1152,7 +1240,9 @@ relative to the component's largest magnitude at the points
 
 Inputs: w - workspace after potsynth_fast_init()
 
-Return: worst error ratio (0 if the check could not be made)
+Return: worst error ratio; 0 if there is nothing to check; minus the error
+        code if the check failed (out of memory, or the radial functions of the
+        caller failed at a check point)
 
 Notes:
 1) The window error is largest where the field has most of its power near the
@@ -1210,6 +1300,7 @@ potsynth_fast_check(potsynth_workspace * w)
   size_t ngrp = 0, nsel = 0, ctop = CHECK_TOP, ntop = 0, npt = 0, i, c, k;
   double worst = 0.0;
   int ok = (grp != NULL && sel != NULL && b1 != NULL);
+  int failed = ok ? POTSYNTH_SUCCESS : POTSYNTH_ENOMEM;
   long row;
   int th0;
 
@@ -1240,6 +1331,8 @@ potsynth_fast_check(potsynth_workspace * w)
       buf = malloc(nchan * CHECK_CHUNK * sizeof(double));
       acc = calloc(4 * ngrp, sizeof(double));
       ok = (tops && topr && topc && r && th && ph && of && od && buf && acc);
+      if (!ok)
+        failed = POTSYNTH_ENOMEM;
     }
 
   if (ok)
@@ -1374,12 +1467,18 @@ potsynth_fast_check(potsynth_workspace * w)
         w->omap = NULL;
         ew = potsynth_eval_alloc(0, w);
         ok = (ew != NULL);
+        if (!ok)
+          failed = POTSYNTH_ENOMEM;
 
         for (i0 = 0; i0 < npt && ok; i0 += CHECK_CHUNK)
           {
             const size_t m = (npt - i0 < CHECK_CHUNK) ? npt - i0 : CHECK_CHUNK;
 
-            ok = (potsynth_eval(m, r + i0, th + i0, ph + i0, buf, ew) == POTSYNTH_SUCCESS);
+            const int st = potsynth_eval(m, r + i0, th + i0, ph + i0, buf, ew);
+
+            ok = (st == POTSYNTH_SUCCESS);
+            if (!ok)
+              failed = st;
 
             for (c = 0; c < nsel && ok; ++c)
               memcpy(of + c * npt + i0, buf + sel[c] * m, m * sizeof(double));
@@ -1393,7 +1492,13 @@ potsynth_fast_check(potsynth_workspace * w)
 
   /* direct sum of the checked channels */
   if (ok)
-    ok = (check_direct(w, nsel, sel, npt, r, th, ph, od) == POTSYNTH_SUCCESS);
+    {
+      const int st = check_direct(w, nsel, sel, npt, r, th, ph, od);
+
+      ok = (st == POTSYNTH_SUCCESS);
+      if (!ok)
+        failed = st;
+    }
 
   /* components: largest error and largest value of each over the points */
   if (ok)
@@ -1433,7 +1538,7 @@ potsynth_fast_check(potsynth_workspace * w)
   free(grp); free(sel); free(b1); free(tops); free(topr); free(topc);
   free(r); free(th); free(ph); free(of); free(od); free(buf); free(acc);
 
-  return worst;
+  return failed ? -(double) failed : worst;
 }
 
 /*

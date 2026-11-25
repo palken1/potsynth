@@ -165,7 +165,8 @@ Parameters
 
    .. c:member:: double sigma
 
-      Oversampling factor of the grid; 0 selects the default, 2.
+      Oversampling factor of the grid; 0 selects the default, 2. Values below 1 are
+      rejected.
 
    .. c:member:: int w
 
@@ -666,6 +667,13 @@ one window sum per point gives all of them. This is how fields that are not grad
 one potential are evaluated, for example the components of a vector spherical harmonic
 expansion (see :ref:`vsh-frontend`), and how many fields are evaluated at once.
 
+The terms of an output are evaluated separately and added, by both methods. When the
+terms nearly cancel, as for the difference of two models, rounding errors of the size of
+the separate terms remain, about :math:`10^{-16}` of them; relative to the output this
+is larger by the ratio of the terms to the output, and ``eps`` cannot be met below that
+(``err_check`` in :c:struct:`potsynth_info` shows it). Form the difference of the
+coefficients first where possible.
+
 .. c:struct:: potsynth_term
 
    One term of an output:
@@ -1118,7 +1126,18 @@ Introspection
    - ``nf1``, ``nf2``, the fine grid size;
    - ``nrows``, the number of stored rows;
    - ``grid_bytes``;
-   - ``ncomp``, the number of field components (the quantities ``eps`` is relative to).
+   - ``ncomp``, the number of field components (the quantities ``eps`` is relative to);
+   - ``err_radial``, the bound of the error of the radial basis over the shell, relative
+     to the size of each component. It is at most ``rank_tol`` (default ``eps/2``) unless
+     the tolerance is below the double-precision floor of the bound (about
+     :math:`10^{-12}` for EGM2008 at degree 2190), which it then shows; -1 if not known
+     (radial functions of the caller, or a model read from a file);
+   - ``err_check``, the largest error found by the window check after set-up, against the
+     direct sum at the points where the window error is likely to be largest, relative to
+     the size of each component. It is at most ``eps`` when the check passed; it can exceed
+     ``eps`` near the rounding floor or with a non-default ``sigma``, after the largest
+     width or four widenings. -1 if there was no check (window width given, or a model
+     read from a file).
 
    The fast-method fields are zero for the direct method.
 

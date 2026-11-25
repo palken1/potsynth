@@ -40,6 +40,7 @@ typedef struct
   double * X;           /* SVD matrix, column-major nfun-by-(K+1) */
   double * V;           /* right singular vectors, (K+1)-by-(K+1) */
   double * sv;          /* singular values, length K+1 */
+  double floor;         /* rounding level of the tail measure of radial_sample() */
 } radial_state_t;
 
 static void radial_state_free(radial_state_t * state);
@@ -117,6 +118,7 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
       w->rho = 1;
       w->ncheb = 1;
       w->ud = 0.0;
+      w->err = 0.0;
       w->basis = potsynth_aligned_alloc(sizeof(double));
       w->beta = potsynth_aligned_calloc(nchan * L1 * sizeof(double));
       if (!w->basis || !w->beta)
@@ -161,6 +163,7 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
           }
 
         ratio = radial_direct_check(lmin, lmax, nchan, rpow, wn, w);
+        w->err = ratio;
 
         if (ratio <= tol || ratio > 0.5 * prev)
           break;
@@ -209,6 +212,7 @@ potsynth_radial_alloc_caller(const size_t nrad, const size_t lmax, const size_t 
       POTSYNTH_ERROR_NULL ("unable to allocate radial workspace", POTSYNTH_ENOMEM);
     }
 
+  w->err = -1.0; /* the caller's functions are used as given */
   w->uc = 1.0;
   w->ud = 0.0;
   w->rho = nrad;
@@ -516,6 +520,20 @@ radial_sample(const double uc, const double ud, radial_state_t * state)
       scale = fmax(scale, sqrt(s2));
     }
 
+  /* rounding level of the tail: each Chebyshev coefficient of f is computed with an
+   * absolute error of about DBL_EPSILON max_j |f(u_j)| */
+  {
+    double fl = 0.0;
+    for (f = 0; f < state->nfun; ++f)
+      {
+        double fm = 0.0;
+        for (j = 0; j <= K; ++j)
+          fm = fmax(fm, fabs(state->A[f * (K + 1) + j]));
+        fl += sqrt(2.0 * state->fpow[f] + 1.0) * fm;
+      }
+    state->floor = (scale > 0.0) ? 2.0 * DBL_EPSILON * fl / scale : 0.0;
+  }
+
   return (scale > 0.0) ? tail / scale : 0.0;
 }
 
@@ -620,8 +638,10 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nchan, const int
         break;
 
       /* rounding: a resolved function's Chebyshev tail falls much faster than 4 times
-       * per doubling; if it did not, the tail is rounding noise: keep the previous K */
-      if (prevK > 0 && tail > 0.25 * prevtail)
+       * per doubling; if it did not and the tail is near its rounding level, the tail is
+       * rounding noise: keep the previous K. Far above that level a slow fall only means
+       * the functions are not resolved yet (thick shells at high degree) */
+      if (prevK > 0 && tail > 0.25 * prevtail && tail <= 100.0 * state->floor)
         {
           K = prevK;
           status = radial_state_resize(K, state);
@@ -800,8 +820,8 @@ exceed it.
 3) tol is floored at 16 DBL_EPSILON, below which the residuals are rounding.
 The rank is also accepted when B is within 4 times its rounding floor
 64 DBL_EPSILON max_j sum_l sqrt(2l+1) wn_l u_j^(l+rpow), or when it has not
-fallen by 4 times over the next 10 ranks (truncation errors fall by about ten
-per rank, rounding does not).
+fallen by 4 times within the next 3 ranks (truncation errors fall by 3 to 10
+times per rank, rounding does not).
 */
 
 static int
@@ -909,12 +929,20 @@ radial_rank_check(const size_t lmin, const size_t lmax, const size_t nchan, cons
 
           /* rounding: the bound has stopped decreasing (truncation errors fall by about a
            * factor of ten per rank, rounding does not) */
-          if (r + 10 < K1)
+          if (r + 3 < K1)
             {
-              double later2 = 0.0;
-              for (j = 0; j < K1; ++j)
-                later2 = fmax(later2, err1[(r + 10) * K1 + j] * err1[(r + 10) * K1 + j]);
-              stalled = (emax2 <= 4.0 * later2);
+              /* smallest bound over the next 3 ranks (not up to the full basis, whose
+               * residual vanishes trivially) */
+              double later2 = HUGE_VAL;
+              size_t r2;
+              for (r2 = r + 1; r2 <= r + 3; ++r2)
+                {
+                  double e2 = 0.0;
+                  for (j = 0; j < K1; ++j)
+                    e2 = fmax(e2, err1[r2 * K1 + j] * err1[r2 * K1 + j]);
+                  later2 = fmin(later2, e2);
+                }
+              stalled = (emax2 <= 16.0 * later2);
             }
 
           if (emax2 <= fmax(tq * tq * fmax2, floor2) || stalled || r == K1)

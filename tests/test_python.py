@@ -450,6 +450,29 @@ def test_vsh():
     check(np.allclose(mb(rr[:5] * 0 + 6800.0, th[:5], ph[:5])[0, 0], p(6800.0) * v0[:5], rtol=1e-8),
           "model usable after an exception")
 
+    # an exception on the second pass over the points (after the library validated them)
+    # is raised by that call, not by a later one
+    calls = [0]
+
+    def late(r):
+        calls[0] += 1
+        if calls[0] > 4:
+            raise ArithmeticError("radial function failed late")
+        return bary(r)
+
+    rad = potsynth.Radial(4, late, rmin=nodes[0], rmax=nodes[-1])
+    calls[0] = -10**9
+    ml = potsynth.VshModel(A["bary"], None, None, quantities="V_r", radial=rad, method="fast", nthreads=1)
+    calls[0] = 0
+    try:
+        ml(np.full(3, 6800.0), th[:3], ph[:3])
+        check(False, "late exception of a radial function not raised")
+    except ArithmeticError:
+        pass
+    calls[0] = -10**9
+    check(np.allclose(ml(rr[:5] * 0 + 6800.0, th[:5], ph[:5])[0, 0], p(6800.0) * v0[:5], rtol=1e-8),
+          "no stale exception after a late failure")
+
     # a compiled radial function (needs a C compiler; skipped without one)
     compiled = _compiled_radial(tempfile.gettempdir())
     if compiled is None:

@@ -82,6 +82,8 @@ typedef struct
   size_t ncheb;         /* Chebyshev terms per radial function */
   double * basis;       /* Chebyshev coefficients, basis[i*ncheb + k] */
   double * beta;        /* expansion coefficients, beta[(c*rho + i)*(lmax+1) + l] */
+  double err;           /* bound of the radial error relative to the size of each quantity
+                           (radial_direct_check()); -1 if not known */
 } potsynth_radial_workspace;
 
 struct potsynth_workspace
@@ -135,6 +137,7 @@ struct potsynth_workspace
 
   /* fast method */
   int w;                /* window width */
+  double check_err;     /* worst error of the window check after set-up; -1: not checked */
   double sigma;         /* oversampling factor */
   double beta;          /* window shape parameter */
   double half;          /* w / 2 */
@@ -259,8 +262,8 @@ double potsynth_op_factor(const int op, const size_t sub, const size_t l, const 
 int potsynth_direct_init(potsynth_workspace * w);
 void potsynth_direct_free(potsynth_workspace * w);
 size_t potsynth_direct_scratch_size(const potsynth_workspace * w);
-void potsynth_direct_block(const size_t nb, const double * r, const double * theta, const double * phi,
-                           const size_t ldo, double * out, double * scratch, const potsynth_workspace * w);
+int potsynth_direct_block(const size_t nb, const double * r, const double * theta, const double * phi,
+                          const size_t ldo, double * out, double * scratch, const potsynth_workspace * w);
 
 /* error.c */
 void potsynth_error(const char * reason, const char * file, int line, int potsynth_errno);

@@ -257,8 +257,10 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
     {
       POTSYNTH_ERROR_NULL ("reference radius must be positive", POTSYNTH_EINVAL);
     }
-  else if (!(p.eps > 0.0) || p.sigma < 0.0 || p.w < 0 || p.rank_tol < 0.0 || p.nthreads < 0)
+  else if (!(p.eps > 0.0) || p.sigma < 0.0 || (p.sigma > 0.0 && p.sigma < 1.0) || p.w < 0 ||
+           p.rank_tol < 0.0 || p.nthreads < 0)
     {
+      /* sigma below 1 would put the spectrum beyond the grid rows */
       POTSYNTH_ERROR_NULL ("invalid parameters", POTSYNTH_EINVAL);
     }
   else if (p.method != POTSYNTH_METHOD_AUTO && p.method != POTSYNTH_METHOD_FAST &&
@@ -337,6 +339,7 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
   w->nchan = nchan;
   w->nout = nchan;
   w->params = p;
+  w->check_err = -1.0;
   w->nthreads = potsynth_max_threads(p.nthreads);
   w->th_lo = p.theta_min;
   w->th_hi = (p.theta_max > 0.0) ? p.theta_max : M_PI;
@@ -478,10 +481,18 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
       if (status == POTSYNTH_SUCCESS && w->params.w <= 0)
         {
           int iter;
-          for (iter = 0; iter < 4; ++iter)
+          for (iter = 0; ; ++iter)
             {
               const double ratio = potsynth_fast_check(w);
-              if (ratio <= w->params.eps || w->w >= POTSYNTH_WMAX)
+              if (ratio < 0.0)
+                {
+                  status = (int) -ratio;
+                  potsynth_error("the window check after set-up failed (out of memory, or the radial "
+                                 "functions of the caller failed)", __FILE__, __LINE__, status);
+                  break;
+                }
+              w->check_err = ratio;
+              if (ratio <= w->params.eps || w->w >= POTSYNTH_WMAX || iter == 4)
                 break;
               potsynth_aligned_free(w->grid);
               w->grid = NULL;
@@ -677,6 +688,8 @@ potsynth_get_info(potsynth_info * info, const potsynth_workspace * w)
       info->nf2 = w->nf2;
       info->nrows = w->nrows;
       info->grid_bytes = w->nrows * w->ncols * w->nchp * sizeof(double);
+      info->err_radial = w->radial_workspace_p->err;
+      info->err_check = w->check_err;
     }
 
   info->ncomp = w->ncomp;

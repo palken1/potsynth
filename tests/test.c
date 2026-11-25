@@ -20,6 +20,7 @@
  * test_region.c  - colatitude range of the evaluation points
  * test_vsh.c     - vector spherical harmonic front-end
  * test_io.c      - model files
+ * test_robust.c  - parameter checks, damaged files, failing radial functions, achieved errors
  * test_grav.c   - gfc reader and gravity front-end
  * test_hess.c    - gradient tensor (second-derivative operators)
  * test_tensor.c  - gradient tensors of the front-ends, frame conversions
@@ -75,6 +76,7 @@
 #include "test_region.c"
 #include "test_vsh.c"
 #include "test_io.c"
+#include "test_robust.c"
 #include "test_grav.c"
 #include "test_hess.c"
 #include "test_tensor.c"
@@ -104,6 +106,7 @@ main(void)
   test_region();
   test_vsh();
   test_io();
+  test_robust();
   test_grav();
   test_hess();
   test_tensor();

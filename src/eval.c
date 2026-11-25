@@ -47,8 +47,8 @@ static int validate(const size_t n, const double * r, const double * theta, cons
 static void window_sum(const double * g0, const size_t rstride, const size_t nchp, const size_t nq,
                        const size_t ww,
                        const double * k1, const double * k2, double * acc);
-static void fast_point(const double r, const double theta, const double phi, const size_t ldo,
-                       double * out, double * scratch, const potsynth_workspace * w);
+static int fast_point(const double r, const double theta, const double phi, const size_t ldo,
+                      double * out, double * scratch, const potsynth_workspace * w);
 static int eval_fast(const size_t n, const double * r, const double * theta, const double * phi,
                      const int rows, double * out, potsynth_eval_workspace * ew);
 static void eval_outputs(const size_t n, const int rows, double * out, potsynth_eval_workspace * ew);
@@ -248,10 +248,18 @@ eval_points(const size_t n, const double * r, const double * theta, const double
       else
         status = eval_direct(n, r, theta, phi, rows, out, ew);
 
-      if (status == POTSYNTH_SUCCESS && w->omap != NULL)
+      if (w->omap != NULL)
         eval_outputs(n, rows, out, ew);
 
-      return status;
+      if (status)
+        {
+          /* the points passed validation, so the caller's radial functions failed on a
+           * second call; their outputs are NaN, the others are valid */
+          POTSYNTH_ERROR ("the radial functions of the caller failed at a point that passed validation; "
+                          "its outputs are NaN", status);
+        }
+
+      return POTSYNTH_SUCCESS;
     }
 }
 
@@ -588,9 +596,12 @@ Inputs: r       - radius
         out     - (output) out[c*ldo]
         scratch - per-thread scratch space
         w       - workspace
+
+Return: success, or POTSYNTH_EDOM if the radial functions of the caller failed
+        at the point (its outputs are then NaN)
 */
 
-static void
+static int
 fast_point(const double r, const double theta, const double phi, const size_t ldo,
            double * out, double * scratch, const potsynth_workspace * w)
 {
@@ -614,7 +625,7 @@ fast_point(const double r, const double theta, const double phi, const size_t ld
       for (c = 0; c < w->nchan; ++c)
         out[c * ldo] = NAN;
 
-      return;
+      return POTSYNTH_SUCCESS; /* NaN output, not an error */
     }
 
   ph = reduce_phi(phi);
@@ -638,7 +649,12 @@ fast_point(const double r, const double theta, const double phi, const size_t ld
       const size_t nchan = w->nchan;
       size_t first, cnt, start, end, j;
 
-      potsynth_radial_eval(w, r, &first, &cnt, b);
+      if (potsynth_radial_eval(w, r, &first, &cnt, b) != POTSYNTH_SUCCESS)
+        {
+          for (c = 0; c < nchan; ++c)
+            out[c * ldo] = NAN;
+          return POTSYNTH_EDOM;
+        }
 
       start = (first * nchan) & ~((size_t) 3);
       end = ((first + cnt) * nchan + 3) & ~((size_t) 3);
@@ -656,7 +672,7 @@ fast_point(const double r, const double theta, const double phi, const size_t ld
           out[c * ldo] = sum;
         }
 
-      return;
+      return POTSYNTH_SUCCESS;
     }
 
   /* w-by-w window sum, all channels */
@@ -701,6 +717,8 @@ fast_point(const double r, const double theta, const double phi, const size_t ld
 
       out[c * ldo] = sum;
     }
+
+  return POTSYNTH_SUCCESS;
 }
 
 /*
@@ -716,6 +734,7 @@ eval_fast(const size_t n, const double * r, const double * theta, const double *
 {
   const potsynth_workspace * w = ew->w;
   const size_t nbc = w->ncols / POTSYNTH_SORT_BLOCK + 1;
+  int fail = 0;
   size_t s0;
 
   for (s0 = 0; s0 < n; s0 += ew->chunk)
@@ -757,7 +776,7 @@ eval_fast(const size_t n, const double * r, const double * theta, const double *
       for (i = 0; i < nc; ++i)
         ew->order[ew->count[ew->key[i]]++] = (uint32_t) i;
 
-#pragma omp parallel for private(blk) schedule(dynamic, 4) num_threads(ew->nthreads)
+#pragma omp parallel for private(blk) schedule(dynamic, 4) num_threads(ew->nthreads) reduction(|:fail)
       for (blk = 0; blk < nblk; ++blk)
         {
 #ifdef _OPENMP
@@ -773,14 +792,14 @@ eval_fast(const size_t n, const double * r, const double * theta, const double *
             {
               const size_t idx = ew->order[jj];
               if (rows)
-                fast_point(EVAL_R(rc, idx), tc[idx], pc[idx], 1, out + (s0 + idx) * w->nout, scratch, w);
+                fail |= fast_point(EVAL_R(rc, idx), tc[idx], pc[idx], 1, out + (s0 + idx) * w->nout, scratch, w);
               else
-                fast_point(EVAL_R(rc, idx), tc[idx], pc[idx], n, out + s0 + idx, scratch, w);
+                fail |= fast_point(EVAL_R(rc, idx), tc[idx], pc[idx], n, out + s0 + idx, scratch, w);
             }
         }
     }
 
-  return POTSYNTH_SUCCESS;
+  return fail ? POTSYNTH_EDOM : POTSYNTH_SUCCESS;
 }
 
 /*
@@ -796,9 +815,10 @@ eval_direct(const size_t n, const double * r, const double * theta, const double
   const potsynth_workspace * w = ew->w;
   const size_t nchan = w->nchan;
   const long nblk = (long) ((n + POTSYNTH_NB - 1) / POTSYNTH_NB);
+  int fail = 0;
   long blk;
 
-#pragma omp parallel for private(blk) schedule(dynamic, 16) num_threads(ew->nthreads)
+#pragma omp parallel for private(blk) schedule(dynamic, 16) num_threads(ew->nthreads) reduction(|:fail)
   for (blk = 0; blk < nblk; ++blk)
     {
 #ifdef _OPENMP
@@ -814,20 +834,48 @@ eval_direct(const size_t n, const double * r, const double * theta, const double
       int bad[POTSYNTH_NB];
       size_t j, c;
 
-      /* non-finite points are replaced by a harmless one and flagged */
+      double rgood = w->a;
+      size_t ngood = 0;
+
+      /* non-finite points are replaced by a harmless one and flagged; its radius is that
+       * of a valid point of the block, which is inside the range of radial functions of
+       * the caller */
       for (j = 0; j < nb; ++j)
         {
           const double rj = EVAL_R(r, j0 + j);
 
           bad[j] = !point_finite(rj, theta[j0 + j], phi[j0 + j]);
-          rb[j] = bad[j] ? w->a : rj;
+          if (!bad[j] && ngood++ == 0)
+            rgood = rj;
+        }
+
+      for (j = 0; j < nb; ++j)
+        {
+          rb[j] = bad[j] ? rgood : EVAL_R(r, j0 + j);
           tb[j] = bad[j] ? 0.5 * M_PI : theta[j0 + j];
           pb[j] = bad[j] ? 0.0 : phi[j0 + j];
         }
 
+      if (ngood == 0)
+        {
+          /* no valid point: all outputs NaN */
+          for (j = 0; j < nb; ++j)
+            {
+              for (c = 0; c < nchan; ++c)
+                {
+                  if (rows)
+                    out[(j0 + j) * w->nout + c] = NAN;
+                  else
+                    out[c * n + j0 + j] = NAN;
+                }
+            }
+
+          continue;
+        }
+
       if (rows)
         {
-          potsynth_direct_block(nb, rb, tb, pb, POTSYNTH_NB, buf, scratch, w);
+          fail |= potsynth_direct_block(nb, rb, tb, pb, POTSYNTH_NB, buf, scratch, w);
 
           for (j = 0; j < nb; ++j)
             {
@@ -839,7 +887,7 @@ eval_direct(const size_t n, const double * r, const double * theta, const double
         }
       else
         {
-          potsynth_direct_block(nb, rb, tb, pb, n, out + j0, scratch, w);
+          fail |= potsynth_direct_block(nb, rb, tb, pb, n, out + j0, scratch, w);
 
           for (j = 0; j < nb; ++j)
             {
@@ -852,5 +900,5 @@ eval_direct(const size_t n, const double * r, const double * theta, const double
         }
     }
 
-  return POTSYNTH_SUCCESS;
+  return fail ? POTSYNTH_EDOM : POTSYNTH_SUCCESS;
 }

@@ -154,7 +154,7 @@ typedef struct
 {
   double eps;           /* requested accuracy relative to max of each quantity, default 1e-10 */
   int method;           /* POTSYNTH_METHOD_xxx, default POTSYNTH_METHOD_AUTO */
-  double sigma;         /* grid oversampling factor; 0 = default (2) */
+  double sigma;         /* grid oversampling factor, at least 1; 0 = default (2) */
   int w;                /* window width; 0 = chosen from eps */
   double rank_tol;      /* radial SVD tolerance; 0 = 0.5 * eps */
   int nthreads;         /* OpenMP threads; 0 = all available */
@@ -184,6 +184,13 @@ typedef struct
   size_t nrows;         /* stored grid rows */
   size_t grid_bytes;    /* memory used by the grid */
   size_t ncomp;         /* number of field components (the quantities eps is relative to) */
+  double err_radial;    /* bound of the error of the radial basis over the shell, relative to
+                           the size of each component (at most rank_tol where it is reachable);
+                           -1 if not known (radial functions of the caller, model read from a file) */
+  double err_check;     /* largest error of the window check after set-up, against the direct
+                           sum, relative to the size of each component (at most eps when the
+                           check passed); -1 if there was no check (window width given, or a
+                           model read from a file) */
 } potsynth_info;
 
 /*

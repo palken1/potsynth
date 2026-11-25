@@ -122,7 +122,9 @@ class Info_t(ctypes.Structure):
                 ("nf2", ctypes.c_size_t),
                 ("nrows", ctypes.c_size_t),
                 ("grid_bytes", ctypes.c_size_t),
-                ("ncomp", ctypes.c_size_t)]
+                ("ncomp", ctypes.c_size_t),
+                ("err_radial", ctypes.c_double),
+                ("err_check", ctypes.c_double)]
 
 
 def _libname(base):

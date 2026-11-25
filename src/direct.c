@@ -305,6 +305,9 @@ Inputs: nb      - number of points (<= POTSYNTH_NB)
         scratch - scratch space, length potsynth_direct_scratch_size()
         w       - workspace
 
+Return: success, or POTSYNTH_EDOM if the radial functions of the caller failed
+        at a point (its outputs are then NaN)
+
 Notes:
 1) The diagonal scaling, s^(m-1), u^m and cos/sin(m phi) are carried across
 orders; cos/sin(m phi) by rotation, recomputed exactly every 16 orders so that
@@ -313,7 +316,7 @@ rounding errors cannot accumulate
 2) s^(m-1) is kept as mantissa and exponent, renormalized only near underflow
 */
 
-void
+int
 potsynth_direct_block(const size_t nb, const double * r, const double * theta, const double * phi,
                       const size_t ldo, double * out, double * scratch, const potsynth_workspace * w)
 {
@@ -508,14 +511,22 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
 
   if (w->nrad > 0)
     {
-      /* radial functions of the caller at each point (validated before) */
+      /* radial functions of the caller at each point (validated before; a later
+       * failure of the caller's function gives NaN and an error) */
       double * f = res + nchan * nsetr * POTSYNTH_NB;
+      int status = POTSYNTH_SUCCESS;
 
       for (j = 0; j < nb; ++j)
         {
           size_t first, cnt, i;
 
-          potsynth_radial_eval(w, r[j], &first, &cnt, f);
+          if (potsynth_radial_eval(w, r[j], &first, &cnt, f) != POTSYNTH_SUCCESS)
+            {
+              for (c = 0; c < nchan; ++c)
+                out[c * ldo + j] = NAN;
+              status = POTSYNTH_EDOM;
+              continue;
+            }
 
           for (c = 0; c < nchan; ++c)
             {
@@ -528,7 +539,7 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
             }
         }
 
-      return;
+      return status;
     }
 
   for (c = 0; c < nchan; ++c)
@@ -548,6 +559,8 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
           out[c * ldo + j] = res[c * POTSYNTH_NB + j] * f;
         }
     }
+
+  return POTSYNTH_SUCCESS;
 }
 
 #ifndef POTSYNTH_HAVE_VECEXT

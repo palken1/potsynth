@@ -8,7 +8,7 @@ import numpy as np
 
 from . import _lib
 from ._lib import lib
-from .core import OPTIONS_DOC, _coefficients, _Evaluator, _options, _raise
+from .core import OPTIONS_DOC, _coefficients, _Evaluator, _options, _raise_radial, _reset_radial
 
 _NORMS = {"full": _lib.VSH_NORM_FULL, "schmidt": _lib.VSH_NORM_SCHMIDT}
 _QUANTITIES = {"V": (_lib.VSH_V, ("V_r", "V_theta", "V_phi")),
@@ -122,12 +122,13 @@ class VshModel(_Evaluator):
         self._radial = radial           # keeps the C structures of the radial functions alive
         ptr = lambda x: None if x is None else x.ctypes.data_as(_lib.c_double_p)
         _lib.clear_error()
+        _reset_radial(radial)
         w_ptr = lib.potsynth_vsh_alloc(lmin, lmax, mmax, nexp, ptr(a), ptr(b), ptr(c), _NORMS[norm],
                                        flags, rmin, rmax,
                                        None if radial is None else ctypes.byref(radial._c),
                                        ctypes.byref(p))
         if not w_ptr:
-            _raise(_lib.POTSYNTH_EINVAL, "potsynth_vsh_alloc")
+            _raise_radial(radial, _lib.POTSYNTH_EINVAL, "potsynth_vsh_alloc")
         super().__init__(w_ptr, nexp * len(names), chunk, needs_r=radial is not None)
         self.nexp = nexp
         self.outputs = names
