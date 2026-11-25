@@ -119,7 +119,7 @@ _OPTIONS = {"eps": 1e-10, "method": "auto", "nthreads": 0, "sigma": 0.0, "w": 0,
 OPTIONS_DOC = """
     Options (keyword arguments of every model class):
 
-    eps : requested accuracy relative to the largest magnitude of each field component
+    eps : requested accuracy relative to the largest magnitude of each irreducible component
           (a scalar, or a horizontal vector or tensor; see the documentation), default 1e-10
     method : "auto" (default), "fast" or "direct"
     npts_hint : expected number of evaluation points; with "auto", the method with the
@@ -372,7 +372,7 @@ class _Evaluator:
     @property
     def info(self):
         """Parameters chosen at set-up (method, window width, radial rank, grid size,
-        number of field components...)."""
+        number of irreducible components...)."""
         i = _lib.Info_t()
         lib.potsynth_get_info(ctypes.byref(i), self._ptr)
         d = {name: getattr(i, name) for name, _ in _lib.Info_t._fields_}
@@ -433,6 +433,8 @@ class Model(_Evaluator):
         funcs = (_lib.Functional_t * len(functionals))()
         self._rfac = []
         for i, ch in enumerate(functionals):
+            if ch.theta not in _THETA_OPS:
+                raise ValueError(f"unknown operator {ch.theta!r}; use {sorted(_THETA_OPS)}")
             funcs[i].rpow = ch.rpow
             funcs[i].theta = _THETA_OPS[ch.theta]
             funcs[i].dphi = ch.dphi
@@ -471,7 +473,7 @@ class Output:
     """One output of a SetsModel: (a/r)^(l + rpow) times the sum of its terms (with
     radial functions of the caller: their sum, and rpow is not used).
 
-    The terms must form one field component: all with the same operator, or the two
+    The terms must form one irreducible component: all with the same operator, or the two
     operators ("dP", dphi=0) and ("Psin", dphi=1) of a horizontal vector, or, with a
     component and a weight given, ("S2A", dphi=0) and ("S2B", dphi=1) of a horizontal
     tensor. component: outputs with the same value > 0 form one component, and eps is

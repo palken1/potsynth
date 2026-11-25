@@ -214,7 +214,7 @@ potsynth_mag_rtp2nec()
 (B_north, B_east, B_center) = (-B_theta, B_phi, -B_r)
 
 Inputs: n - number of points
-        B - field, functional-major as output by potsynth_eval(), length 3*n
+        B - field, output-major as output by potsynth_eval(), length 3*n
 */
 
 void

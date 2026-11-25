@@ -70,7 +70,7 @@ class VshModel(_Evaluator):
     rmin, rmax : radius range of the evaluation points, within the range of the radial
         functions (default: rmin and rmax of the Radial object)
     """ + OPTIONS_DOC + """
-    eps is relative to the largest magnitude of each component of each field (V_r; the
+    eps is relative to the largest magnitude of each irreducible component of each field (V_r; the
     horizontal vector; the divergence; the curl).
 
     Calling the model with (r, theta, phi) returns an array of shape

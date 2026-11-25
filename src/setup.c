@@ -481,6 +481,7 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
        * exceeds eps (automatic width only) */
       if (status == POTSYNTH_SUCCESS && w->params.w <= 0)
         {
+          double prev = HUGE_VAL;
           int iter;
           for (iter = 0; ; ++iter)
             {
@@ -493,8 +494,12 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
                   break;
                 }
               w->check_err = ratio;
-              if (ratio <= w->params.eps || w->w >= POTSYNTH_WMAX || iter == 4)
+              /* stop at eps, at the widest window, after 4 widenings, or when a widening did
+               * not halve the error: a window error falls much faster than that per node,
+               * so the rest is radial error or rounding, which a wider window cannot remove */
+              if (ratio <= w->params.eps || w->w >= POTSYNTH_WMAX || iter == 4 || ratio > 0.5 * prev)
                 break;
+              prev = ratio;
               potsynth_aligned_free(w->grid);
               w->grid = NULL;
               w->params.w = w->w + 1;
@@ -595,7 +600,7 @@ potsynth_radial_eval(const potsynth_workspace * w, const double r, size_t * firs
       return POTSYNTH_SUCCESS;
     }
 
-  if (w->rfn(r, first, n, f, NULL, w->rfn_params) != POTSYNTH_SUCCESS || *n == 0 || *first + *n > w->nrad)
+  if (w->rfn(r, first, n, f, NULL, w->rfn_params) != POTSYNTH_SUCCESS || *n == 0 || *n > w->nrad || *first > w->nrad - *n)
     return POTSYNTH_EDOM;
 
   return POTSYNTH_SUCCESS;
@@ -779,6 +784,7 @@ potsynth_set_outputs(potsynth_workspace * w, const size_t nout, const double * m
       POTSYNTH_ERROR ("invalid output map", POTSYNTH_EINVAL);
     }
 
+  free(w->omap); /* a map set before */
   w->omap = malloc(nout * w->nfunc * sizeof(double));
   if (w->omap == NULL)
     {

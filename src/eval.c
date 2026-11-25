@@ -177,12 +177,12 @@ returned if any point has theta outside [0,pi], r <= 0, (fast method) r outside
 [rmin,rmax] or theta outside the colatitude range of the model, or (radial
 functions of the caller) r outside the range of the functions
 
-4) r may be NULL for a model without radial dependence
+2) r may be NULL for a model without radial dependence
 
-2) Points with a NaN or infinite coordinate are not an error: their outputs
+3) Points with a NaN or infinite coordinate are not an error: their outputs
 are set to NaN
 
-3) The results are bitwise identical for any number of threads and chunk size
+4) The results are bitwise identical for any number of threads and chunk size
 */
 
 int

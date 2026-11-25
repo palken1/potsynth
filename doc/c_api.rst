@@ -647,7 +647,7 @@ The front-ends provide the gradient tensor directly (:c:macro:`POTSYNTH_MAG_GRAD
 
 with :math:`T_{\theta\theta} = (-T_{rr} + D)/2` and :math:`T_{\phi\phi} = (-T_{rr} - D)/2`.
 
-.. c:function:: potsynth_workspace * potsynth_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const double * coef, const double a, const double rmin, const double rmax, const size_t nfunc, const potsynth_functional * chan, const potsynth_parameters * params)
+.. c:function:: potsynth_workspace * potsynth_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const double * coef, const double a, const double rmin, const double rmax, const size_t nfunc, const potsynth_functional * func, const potsynth_parameters * params)
 
    Builds a model with user-defined functionals.
 
@@ -742,7 +742,7 @@ coefficients first where possible.
    :c:macro:`potsynth_idx`. The other arguments are as for :c:func:`potsynth_alloc`,
    which is the case of one set and one term with factor 1 per output.
 
-   The terms of an output must form one field component, because the accuracy is
+   The terms of an output must form one irreducible component, because the accuracy is
    controlled per component (see :ref:`accuracy`). Either all terms have the same
    operators, or each term is one of ``(POTSYNTH_THETA_DP, dphi = 0)`` and
    ``(POTSYNTH_THETA_PSIN, dphi = 1)``, the two operators of a horizontal vector; or,
@@ -1080,7 +1080,9 @@ a file after its set-up and read instead of being set up again.
 .. c:function:: potsynth_workspace * potsynth_read(const char * filename, const potsynth_radial * radial, const int nthreads)
 
    Reads a model. ``radial`` must be the radial functions of the caller for a model that
-   was set up with them (they are not stored), and ``NULL`` otherwise. ``nthreads`` is
+   was set up with them (they are not stored), and ``NULL`` otherwise, including a model
+   without radial dependence (a VSH model on one sphere, set up with ``{1, NULL, NULL}``
+   or without radial functions); ``{1, NULL, NULL}`` is accepted there too. ``nthreads`` is
    the number of threads of the evaluation, 0 for all. The model gives the same values
    as the one that was written, bit for bit. Returns ``NULL`` if the file cannot be
    read, is not a model file, is damaged, or does not match ``radial``.

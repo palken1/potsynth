@@ -86,6 +86,15 @@ First public release.
   `extern/pocketfft_cpp`, called from one C++ file) instead of the C pocketfft: the many
   transforms of an order or a grid row are done in one call, vectorized across them, and
   the phi pass transforms each row in place. Building needs a C++11 compiler too.
+- Robustness after a code review: the radial step returns the best basis of its
+  refinement passes and never returns without one (after 8 passes it could); out-of-memory in the radial
+  check and the window check is an error instead of a pass; the range check of the
+  caller's radial functions cannot overflow; the window is no longer widened again when
+  a widening did not halve the error; `potsynth_vsh_nout` returns 0 for invalid flags;
+  `potsynth_read` accepts NULL for a model without radial dependence (a VSH model on one
+  sphere; the model file records this); pkg-config names libc++ only for Apple's clang.
+- The radial step computes each power u^(l+p) once per degree instead of once per radial
+  function, and copies the coefficients of functionals with the same radial power.
 - Set-up skips the theta-derivative column of the Legendre recursion when no functional
   uses it (potentials and radial components alone).
 - Robustness: functions that need the coefficients of a model refuse a fast workspace,

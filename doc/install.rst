@@ -12,7 +12,7 @@ From a source checkout:
    pip install .
 
 This builds the C library with CMake and installs it inside the Python package; it
-needs a C compiler. Once potsynth is published on PyPI, ``pip install potsynth`` will
+needs a C11 and a C++11 compiler. Once potsynth is published on PyPI, ``pip install potsynth`` will
 install a prebuilt wheel with the library included, and fall back to building from the
 source distribution on platforms without one.
 
@@ -85,8 +85,9 @@ Linking
 
    cc -O2 myprog.c -I/prefix/include -L/prefix/lib -lpotsynth -lm
 
-When linking a static library built with OpenMP, also add the compiler's OpenMP flag
-(e.g. ``-fopenmp``).
+When linking a static library, also add the C++ runtime (``-lstdc++`` with GCC and with
+clang on Linux, ``-lc++`` with Apple's clang), and, if it was built with OpenMP, the
+compiler's OpenMP flag (e.g. ``-fopenmp``).
 
 The installation includes a pkg-config file, ``potsynth.pc``, in ``<libdir>/pkgconfig``:
 
@@ -95,7 +96,7 @@ The installation includes a pkg-config file, ``potsynth.pc``, in ``<libdir>/pkgc
    cc -O2 myprog.c $(pkg-config --cflags --libs potsynth)
 
 Use ``pkg-config --static --libs potsynth`` for a static library; it adds the math
-library and the OpenMP flag. CMake chooses the library directory of the platform
+library, the C++ runtime and the OpenMP flag. CMake chooses the library directory of the platform
 (``lib64`` on some Linux systems); pass ``-DCMAKE_INSTALL_LIBDIR=lib`` to change it.
 
 .. _python-install:

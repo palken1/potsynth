@@ -145,10 +145,15 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
      * until the bound stops falling (rounding) */
     size_t kmin = 0, iter;
     double rtol = 0.5 * tol, prev = HUGE_VAL;
+    /* the basis with the smallest bound of the passes so far (the later one if they are
+     * equal), kept aside so that a basis is returned even when the loop ends after 8
+     * passes; near the rounding floor a later pass can be marginally worse */
+    double * bbasis = NULL, * bbeta = NULL, best = HUGE_VAL;
+    size_t brho = 0, bncheb = 0;
 
     for (iter = 0; iter < 8; ++iter)
       {
-        double ratio;
+        double ratio = 0.0;
         size_t Kused;
 
         memset(&state, 0, sizeof(radial_state_t));
@@ -156,14 +161,43 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
         Kused = state.K;
         radial_state_free(&state);
 
+        if (status == POTSYNTH_SUCCESS)
+          {
+            ratio = radial_direct_check(lmin, lmax, nfunc, rpow, wn, w);
+            if (ratio < 0.0)
+              status = POTSYNTH_ENOMEM; /* reported below */
+          }
+
         if (status)
           {
+            potsynth_aligned_free(bbasis);
+            potsynth_aligned_free(bbeta);
             potsynth_radial_free(w);
+            if (status == POTSYNTH_ENOMEM)
+              {
+                POTSYNTH_ERROR_NULL ("unable to allocate the radial check", POTSYNTH_ENOMEM);
+              }
             return NULL;
           }
 
-        ratio = radial_direct_check(lmin, lmax, nfunc, rpow, wn, w);
-        w->err = ratio;
+        if (bbasis == NULL || !(ratio > best))
+          {
+            potsynth_aligned_free(bbasis);
+            potsynth_aligned_free(bbeta);
+            bbasis = w->basis;
+            bbeta = w->beta;
+            brho = w->rho;
+            bncheb = w->ncheb;
+            best = ratio;
+          }
+        else
+          {
+            potsynth_aligned_free(w->basis);
+            potsynth_aligned_free(w->beta);
+          }
+
+        w->basis = NULL;
+        w->beta = NULL;
 
         if (ratio <= tol || ratio > 0.5 * prev)
           break;
@@ -172,11 +206,14 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
         rtol *= 0.5 * tol / ratio;
         if (Kused < (size_t) ((long) lmax + maxpow) && iter > 0)
           kmin = 2 * Kused;
-        potsynth_aligned_free(w->basis);
-        potsynth_aligned_free(w->beta);
-        w->basis = NULL;
-        w->beta = NULL;
       }
+
+    /* after at most 8 passes, the best basis (never none) */
+    w->basis = bbasis;
+    w->beta = bbeta;
+    w->rho = brho;
+    w->ncheb = bncheb;
+    w->err = best;
   }
 
   return w;
@@ -770,22 +807,48 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nfunc, const int
   w->rho = rho;
   w->ncheb = ncheb;
 
-  /* beta_{c,i,l} = sum_j U_ji sqrt(c_j) u_j^(l+rpow_c) (Chebyshev-weighted projection) */
-  for (c = 0; c < nfunc; ++c)
-    {
-      for (i = 0; i < rho; ++i)
-        {
-          for (l = lmin; l <= lmax; ++l)
-            {
-              double sum = 0.0;
+  /* the powers are computed once per degree (not once per radial function), and the
+   * rows of a functional with the radial power of an earlier one are copied from it */
+  {
+    double * pw = malloc((K + 1) * sizeof(double)); /* u_j^(l+rpow_c) */
 
-              for (j = 0; j <= K; ++j)
-                sum += state->V[i * (K + 1) + j] * state->sq[j] * pow(state->uj[j], (double) l + rpow[c]);
+    if (pw == NULL)
+      {
+        POTSYNTH_ERROR ("unable to allocate radial powers", POTSYNTH_ENOMEM);
+      }
 
-              w->beta[(c * rho + i) * L1 + l] = sum;
-            }
-        }
-    }
+    for (c = 0; c < nfunc; ++c)
+      {
+        size_t c2;
+
+        for (c2 = 0; c2 < c && rpow[c2] != rpow[c]; ++c2)
+          ;
+
+        if (c2 < c)
+          {
+            memcpy(w->beta + c * rho * L1, w->beta + c2 * rho * L1, rho * L1 * sizeof(double));
+            continue;
+          }
+
+        for (l = lmin; l <= lmax; ++l)
+          {
+            for (j = 0; j <= K; ++j)
+              pw[j] = pow(state->uj[j], (double) l + rpow[c]);
+
+            for (i = 0; i < rho; ++i)
+              {
+                double sum = 0.0;
+
+                for (j = 0; j <= K; ++j)
+                  sum += state->V[i * (K + 1) + j] * state->sq[j] * pw[j];
+
+                w->beta[(c * rho + i) * L1 + l] = sum;
+              }
+          }
+      }
+
+    free(pw);
+  }
 
   return POTSYNTH_SUCCESS;
 }
@@ -979,6 +1042,7 @@ the final basis (Chebyshev series as used at evaluation) at 8 ncheb + 1 points
 of the shell, so it includes the error between the SVD nodes.
 2) The size is F = max_u (sum_l w_l^2 u^(2(l+p)))^(1/2), at most the largest
 magnitude of the component in the shell.
+3) Returns -1 if memory could not be allocated.
 */
 
 static double
@@ -997,7 +1061,7 @@ radial_direct_check(const size_t lmin, const size_t lmax, const size_t nfunc, co
     {
       free(bu);
       free(T);
-      return 0.0;
+      return -1.0; /* out of memory */
     }
 
   for (m = 0; m < M; ++m)

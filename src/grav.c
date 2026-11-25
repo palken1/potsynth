@@ -84,7 +84,7 @@ T_rp, T_tt, T_tp, T_pp (1/s^2, with POTSYNTH_GRAV_T). g_r is negative
 method; request only the quantities needed
 
 3) The accuracy eps of the fast method is relative to the maximum of each
-functional, which for a full model is dominated by the central (l = 0) term
+irreducible component, which for a full model is dominated by the central (l = 0) term
 */
 
 potsynth_workspace *

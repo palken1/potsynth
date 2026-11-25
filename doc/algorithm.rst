@@ -51,7 +51,7 @@ and :math:`\mathbf{g} = \nabla V` has the three functionals above with factors
 
 Nothing in the method requires the functionals to come from one potential. A model may
 hold several coefficient sets, and a functional may be a sum of terms of the form
-:eq:`functional` with different sets, as long as the terms belong to one field component
+:eq:`functional` with different sets, as long as the terms belong to one irreducible component
 (a scalar, a horizontal vector, or a horizontal tensor). The horizontal components of
 a vector spherical harmonic expansion
 :math:`\sum_{lm} b_{lm}\boldsymbol\Psi_{lm} + c_{lm}\boldsymbol\Phi_{lm}`, for example,
@@ -524,7 +524,7 @@ Fourier series in :math:`\theta` are still computed for the whole circle.
 - **Padding columns:** the grid has :math:`w/2 + 1` periodically repeated columns before
   :math:`\phi = 0` and :math:`w + 1` after :math:`\phi = 2\pi`, so a window never wraps
   around in longitude.
-- **Functional layout:** all :math:`n_{ch} = \rho \times` (number of functionals) values of a
+- **Layer layout:** all :math:`n_{ch} = \rho \times` (number of functionals) grid layers of a
   grid node are stored next to each other, padded to a multiple of 4. One row of a
   point's window is then a single contiguous block of :math:`w\, n_{ch}` values.
 
@@ -1030,10 +1030,10 @@ using these empirical cost models (in seconds):
 .. math::
 
    t_{setup} &= 6.3 \times 10^{-12}\, n_{ch} L^3 + 7.8 \times 10^{-8}\, n_{ch} L^2, \\
-   t_{direct} &= 3.5 \times 10^{-11}\, L^2 \left(1 + (n_{chan} - 1)/2\right), \\
+   t_{direct} &= 3.5 \times 10^{-11}\, L^2 \left(1 + (n_{f} - 1)/2\right), \\
    t_{fast} &= 1.5 \times 10^{-11}\, w^2 n_{ch} + 5 \times 10^{-8},
 
-where :math:`n_{ch} = n_{chan}\,\rho`, and the radial rank is estimated as
+where :math:`n_f` is the number of functionals, :math:`n_{ch} = n_f\,\rho` the number of grid layers, and the radial rank is estimated as
 :math:`\rho \approx 2 + 0.7 \log_{10}(1/\varepsilon)`. The models reproduce the
 measured break-even points to within a factor of two. Near the break-even both methods
 take about the same time, so an imperfect choice costs little. Without a hint, the fast

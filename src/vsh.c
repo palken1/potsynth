@@ -38,6 +38,9 @@ potsynth_vsh_nout()
 size_t
 potsynth_vsh_nout(const int quantities)
 {
+  if (quantities & ~(POTSYNTH_VSH_V | POTSYNTH_VSH_DIV | POTSYNTH_VSH_CURL))
+    return 0; /* invalid flags, as potsynth_mag_nout() and potsynth_grav_nout() */
+
   return ((quantities & POTSYNTH_VSH_VR) ? 1 : 0) + ((quantities & POTSYNTH_VSH_VH) ? 2 : 0) +
          ((quantities & POTSYNTH_VSH_DIV) ? 1 : 0) + ((quantities & POTSYNTH_VSH_CURL) ? 1 : 0);
 }

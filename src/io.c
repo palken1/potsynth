@@ -29,6 +29,8 @@
 #define IO_MAGIC                     "PSYNTHW1"
 #define IO_BOM                       UINT64_C(0x0102030405060708)
 #define IO_MAXIDX                    (1L << 40) /* bound on grid row and column indices */
+#define IO_FLAG_MAP                  0x1 /* flags (last unsigned header value): output map stored */
+#define IO_FLAG_NORADIAL             0x2 /* one radial function and no function of the caller */
 #define NHEAD_U                      17
 #define NHEAD_I                      4
 #define NHEAD_D                      15
@@ -64,7 +66,9 @@ potsynth_write(const char * filename, const potsynth_workspace * w)
       const uint64_t bom = IO_BOM;
       const uint64_t hu[NHEAD_U] = { w->lmin, w->lmax, w->mmax, w->nfunc, w->nout, w->nrad, w->ncomp,
                                      (uint64_t) w->w, w->nf1, w->nf2, w->nrows, w->ncols, w->nch, w->nchp,
-                                     rad->rho, rad->ncheb, (w->omap != NULL) };
+                                     rad->rho, rad->ncheb,
+                                     (uint64_t) ((w->omap != NULL) ? IO_FLAG_MAP : 0) |
+                                     ((w->nrad > 0 && w->rfn == NULL) ? IO_FLAG_NORADIAL : 0) };
       const int64_t hi[NHEAD_I] = { w->row_lo, w->row_hi, w->col_lo, w->col_hi };
       const double hd[NHEAD_D] = { w->a, w->rmin, w->rmax, w->th_lo, w->th_hi, w->sigma, w->beta, w->half,
                                    w->h1, w->h2, w->inv_h1, w->inv_h2, rad->uc, rad->ud, w->params.eps };
@@ -158,7 +162,10 @@ potsynth_read(const char * filename, const potsynth_radial * radial, const int n
       fclose(fp);
       POTSYNTH_ERROR_NULL ("not a model file of this version and byte order", POTSYNTH_EINVAL);
     }
-  else if ((hu[5] > 0) != (radial != NULL) || (radial != NULL && radial->n != hu[5]) ||
+  else if ((hu[16] & ~(uint64_t) (IO_FLAG_MAP | IO_FLAG_NORADIAL)) != 0 ||
+           (hu[5] == 0 && radial != NULL) ||
+           (hu[5] > 0 && radial == NULL && !(hu[16] & IO_FLAG_NORADIAL)) ||
+           (radial != NULL && radial->n != hu[5]) ||
            (radial != NULL && radial->f == NULL && radial->n != 1))
     {
       fclose(fp);
@@ -249,18 +256,18 @@ potsynth_read(const char * filename, const potsynth_radial * radial, const int n
         isfinite(w->inv_h1) && isfinite(w->inv_h2) && isfinite(w->half) &&
         (w->nrad == 0 || (rad->rho == w->nrad && rad->ncheb == 1)) &&
         w->nout >= w->nfunc && w->nout <= 2 * w->nfunc &&
-        (hu[16] || w->nout == w->nfunc));
+        ((hu[16] & IO_FLAG_MAP) || w->nout == w->nfunc));
 
   if (ok)
     {
       rad->basis = potsynth_aligned_calloc(nbasis * sizeof(double));
       w->grid = potsynth_aligned_calloc(ngrid * sizeof(double));
-      if (hu[16])
+      if (hu[16] & IO_FLAG_MAP)
         w->omap = malloc(w->nout * w->nfunc * sizeof(double));
 
-      ok = (rad->basis != NULL && w->grid != NULL && (!hu[16] || w->omap != NULL));
+      ok = (rad->basis != NULL && w->grid != NULL && (!(hu[16] & IO_FLAG_MAP) || w->omap != NULL));
       ok = ok && (fread(rad->basis, sizeof(double), nbasis, fp) == nbasis);
-      if (ok && hu[16])
+      if (ok && (hu[16] & IO_FLAG_MAP))
         ok = (fread(w->omap, sizeof(double), w->nout * w->nfunc, fp) == w->nout * w->nfunc);
       ok = ok && (fread(w->grid, sizeof(double), ngrid, fp) == ngrid);
     }

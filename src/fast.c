@@ -1500,6 +1500,7 @@ potsynth_fast_check(potsynth_workspace * w)
   double * omap = w->omap;
   size_t ngrp = 0, nsel = 0, ctop = CHECK_TOP, ntop = 0, npt = 0, i, c, k;
   size_t * cg = NULL;   /* many: compact component number of each checked functional */
+  double * lsqall = NULL; /* many: per thread, sums of squares of the components' Laplacians */
   size_t ncg = 0, nlist = 0;
   long * pown = NULL;   /* many: list (component) whose candidate a point is, -1: random */
   int many = 0;
@@ -1515,6 +1516,8 @@ potsynth_fast_check(potsynth_workspace * w)
       ngrp = potsynth_components(w, grp);
       nsel = check_select(w, grp, ngrp, sel);
       ok = (nsel > 0);
+      if (!ok && nfunc > 0)
+        failed = POTSYNTH_ENOMEM; /* check_select() returns 0 only when out of memory */
       /* candidates: CHECK_TOP per functional; with many functionals CHECK_TOP per
          component, so that the number of check points stays bounded without fewer
          candidates for each component */
@@ -1552,6 +1555,7 @@ potsynth_fast_check(potsynth_workspace * w)
       npt = ntop * 12 + CHECK_NRAND;
       tops = calloc(ntop * (size_t) nth, sizeof(double));
       tmin = calloc(nlist * (size_t) nth, sizeof(size_t));
+      lsqall = many ? calloc(ncg * (size_t) nth, sizeof(double)) : NULL;
       pown = malloc(npt * sizeof(long));
       topr = calloc(ntop * (size_t) nth, sizeof(long));
       topc = calloc(ntop * (size_t) nth, sizeof(long));
@@ -1562,7 +1566,7 @@ potsynth_fast_check(potsynth_workspace * w)
       od = malloc(nsel * npt * sizeof(double));
       buf = malloc(nfunc * CHECK_CHUNK * sizeof(double));
       acc = calloc(4 * ngrp, sizeof(double));
-      ok = (tops && tmin && pown && topr && topc && r && th && ph && of && od && buf && acc);
+      ok = (tops && tmin && (!many || lsqall) && pown && topr && topc && r && th && ph && of && od && buf && acc);
       if (!ok)
         failed = POTSYNTH_ENOMEM;
     }
@@ -1591,7 +1595,7 @@ potsynth_fast_check(potsynth_workspace * w)
 #endif
         const size_t nrc = w->nf2 + 2;              /* columns -1 .. nf2 */
         double * ring = malloc(3 * nrc * nsel * sizeof(double));
-        double * lsq = many ? calloc(ncg, sizeof(double)) : NULL; /* per component, many */
+        double * lsq = many ? lsqall + (base / ntop) * ncg : NULL; /* per component, many */
         long have = LONG_MIN;                       /* centre row of the sums in the ring */
 
 #pragma omp for private(row) schedule(static)
@@ -1663,15 +1667,14 @@ potsynth_fast_check(potsynth_workspace * w)
                       {
                         /* weighted sum of squares over the functionals of the component */
                         const double wt = potsynth_func_weight(w, cc);
-                        if (lsq != NULL)
-                          lsq[cg[ck]] += wt * wt * lap * lap;
+                        lsq[cg[ck]] += wt * wt * lap * lap;
                         continue;
                       }
 
                     check_offer(lap, row, col, ctop, tops + slot, topr + slot, topc + slot, jmin);
                   }
 
-                if (many && lsq != NULL)
+                if (many)
                   {
                     size_t kg;
 
@@ -1688,7 +1691,6 @@ potsynth_fast_check(potsynth_workspace * w)
           }
 
         free(ring);
-        free(lsq);
       }
 
       /* merge the threads' lists into the first */
@@ -1844,7 +1846,7 @@ potsynth_fast_check(potsynth_workspace * w)
         }
     }
 
-  free(grp); free(sel); free(b1); free(tops); free(tmin); free(topr); free(topc); free(cg); free(pown);
+  free(grp); free(sel); free(b1); free(tops); free(tmin); free(topr); free(topc); free(cg); free(pown); free(lsqall);
   free(r); free(th); free(ph); free(of); free(od); free(buf); free(acc);
 
   return failed ? -(double) failed : worst;

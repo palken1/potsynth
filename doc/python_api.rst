@@ -307,7 +307,7 @@ Generic models
 .. py:class:: Output(terms, rpow=0, component=0, weight=0.0)
 
    One output: :math:`(a/r)^{l+p}` times the sum of its terms. The terms must form one
-   field component: all with the same operator, or ``("dP", dphi=0)`` and ``("Psin",
+   irreducible component: all with the same operator, or ``("dP", dphi=0)`` and ``("Psin",
    dphi=1)`` (a horizontal vector), or, with ``component`` and ``weight`` given,
    ``("S2A", dphi=0)`` and ``("S2B", dphi=1)`` (a horizontal tensor). Outputs with the
    same ``component`` :math:`> 0` form one component for the accuracy; 0 lets the
@@ -503,7 +503,7 @@ Options
 All model classes accept these keyword arguments:
 
 ``eps``
-   Requested accuracy, relative to the largest magnitude of each field component (a
+   Requested accuracy, relative to the largest magnitude of each irreducible component (a
    scalar, or a horizontal vector or tensor; see :ref:`accuracy`). Default
    :math:`10^{-10}`.
 ``method``

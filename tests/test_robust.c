@@ -52,6 +52,43 @@ test_robust(void)
 
   params.method = POTSYNTH_METHOD_FAST;
 
+  /* a model without radial dependence (VSH on one sphere) is read back with radial = NULL */
+  {
+    double * a1 = test_sets_coef(1, 1, L, L);
+    potsynth_workspace * w1;
+    char name[1024];
+
+    test_io_name(name, sizeof(name));
+    w1 = potsynth_vsh_alloc(1, L, L, 1, a1, NULL, NULL, POTSYNTH_VSH_NORM_FULL, POTSYNTH_VSH_VR, 0.0, 0.0,
+                            NULL, &params);
+    ps_test(w1 == NULL, "robust: VSH model on one sphere");
+    if (w1)
+      {
+        potsynth_workspace * w2;
+
+        ps_test_int(potsynth_write(name, w1), POTSYNTH_SUCCESS, "robust: write a model on one sphere");
+        test_last_error();
+        w2 = potsynth_read(name, NULL, 1);
+        ps_test(w2 == NULL, "robust: model on one sphere read back with radial = NULL");
+        test_last_error();
+        if (w2)
+          {
+            double t[3] = { 0.3, 1.2, 2.9 }, p[3] = { 0.1, 2.0, 4.0 }, o1[3], o2[3];
+            potsynth_eval_workspace * e1 = potsynth_eval_alloc(0, w1), * e2 = potsynth_eval_alloc(0, w2);
+
+            potsynth_eval(3, NULL, t, p, o1, e1);
+            potsynth_eval(3, NULL, t, p, o2, e2);
+            ps_test(memcmp(o1, o2, sizeof(o1)) != 0, "robust: same values after reading");
+            potsynth_eval_free(e1);
+            potsynth_eval_free(e2);
+            potsynth_free(w2);
+          }
+        remove(name);
+        potsynth_free(w1);
+      }
+    free(a1);
+  }
+
   /* the coefficients are freed after a fast set-up: functions that need them refuse it
    * (they read freed memory before) */
   params.method = POTSYNTH_METHOD_FAST;

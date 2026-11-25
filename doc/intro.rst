@@ -67,7 +67,8 @@ Both methods are:
   with exact power-of-two scaling. They are valid up to degree :math:`L = 2800`.
 - **Thread-safe:** a model built once can be shared by any number of threads, and
   evaluation never allocates memory.
-- **Free of required dependencies:** written in C11, with optional OpenMP.
+- **Free of required dependencies:** written in C11 (with one C++11 file, the interface
+  to the bundled FFT), with optional OpenMP.
 
 potsynth is aimed at **static, high-degree models**: lithospheric field models such as
 LCS-1 (degree 185), and gravity models such as EGM2008 (degree 2190). Static models in
