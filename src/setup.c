@@ -398,8 +398,9 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
           w->ptheta[k] = tm->theta;
           w->pdphi[k] = tm->dphi;
 
-          /* the constant factor is applied only when it is not 1, so that models of
-             potsynth_alloc() keep their factors bit for bit */
+          /* the constant factor is applied only when it is not 1, so that the per-degree
+             factors of models of potsynth_alloc() are those of version 1bb53c5 bit for bit
+             (the radial weights and hence the fast results may differ in the last bits) */
           for (l = 0; l <= lmax; ++l)
             {
               const double rf = (tm->rfac != NULL) ? tm->rfac[l] : 1.0;

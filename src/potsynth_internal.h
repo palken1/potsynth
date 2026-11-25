@@ -256,6 +256,8 @@ potsynth_part_set(const potsynth_workspace * w, const size_t p, const size_t i)
 /* alf.c */
 potsynth_alf_workspace * potsynth_alf_alloc(const size_t lmax);
 void potsynth_alf_free(potsynth_alf_workspace * w);
+void potsynth_alf_column_q(const size_t m, const double * x, double * Q, double * G,
+                           const potsynth_alf_workspace * w);
 void potsynth_alf_column(const size_t m, const double * x, const double * s,
                          double * Q, double * E, double * G, const potsynth_alf_workspace * w);
 void potsynth_alf_accum(const size_t nn, const size_t npair, const double * W, const size_t ldw,

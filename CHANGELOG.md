@@ -82,7 +82,11 @@ First public release.
 - Radial functions of the caller are called once per point: validation checks the radius
   against [rmin, rmax] of the model, where the functions must be valid (they were called
   in validation and again in the evaluation).
-- Robustness: the free functions accept NULL, as `free()` does; colatitudes up to 1e-6 rad
+- Set-up skips the theta-derivative column of the Legendre recursion when no functional
+  uses it (potentials and radial components alone).
+- Robustness: functions that need the coefficients of a model refuse a fast workspace,
+  whose coefficients are freed after set-up (they read freed memory);
+  the free functions accept NULL, as `free()` does; colatitudes up to 1e-6 rad
   outside [0, pi] are accepted (pi in single precision), with the smooth continuation of
   the field across the pole; the direct method refuses a point where (a/r)^lmax would overflow
   (it gave NaN); CMake looks for Homebrew's libomp on macOS; `sigma` below 1 is rejected (it overflowed the grid); `potsynth_read`

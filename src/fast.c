@@ -80,6 +80,7 @@ typedef struct
   size_t * tfunc;       /* functional of each term pair */
   size_t * tpart;       /* part (operator and coefficient set) of each term pair */
   int needG;            /* 1 if any term uses column G */
+  int needE;            /* 1 if any term uses column E (none for potentials and radial derivatives) */
   cfft_plan pt;         /* FFT of length Nt */
   cfft_plan p1;         /* FFT of length nf1 */
   rfft_plan p2;         /* real FFT of length nf2 */
@@ -118,6 +119,12 @@ potsynth_fast_init(potsynth_workspace * w)
   double tol;
   long mm, rr;
   int status = POTSYNTH_SUCCESS;
+
+  if (w->C == NULL || w->S == NULL)
+    {
+      /* freed after a fast set-up (setup.c): such a workspace cannot be set up again */
+      POTSYNTH_ERROR ("the coefficients of the model were freed after its fast set-up", POTSYNTH_EINVAL);
+    }
 
   /* window */
   w->sigma = (w->params.sigma > 0.0) ? w->params.sigma : 2.0;
@@ -324,6 +331,7 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
     }
 
   state->needG = 0;
+  state->needE = 0;
   for (j = 0; j < w->nfunc; ++j)
     {
       const size_t rho = w->radial_workspace_p->rho;
@@ -342,6 +350,8 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
               state->tpart[kt] = p;
               if (state->tcol[kt] == POTSYNTH_COL_G)
                 state->needG = 1;
+              if (state->tcol[kt] == POTSYNTH_COL_E)
+                state->needE = 1;
             }
         }
     }
@@ -406,7 +416,7 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
       thread->n0 = malloc(state->nterm * sizeof(size_t));
       thread->src = malloc(state->nterm);
       thread->Q = potsynth_aligned_alloc(L1 * POTSYNTH_NB * sizeof(double));
-      thread->E = potsynth_aligned_alloc(L1 * POTSYNTH_NB * sizeof(double));
+      thread->E = state->needE ? potsynth_aligned_alloc(L1 * POTSYNTH_NB * sizeof(double)) : NULL;
       thread->G = state->needG ? potsynth_aligned_alloc(L1 * POTSYNTH_NB * sizeof(double)) : NULL;
       thread->acc = potsynth_aligned_alloc(4 * state->nterm * POTSYNTH_NB * sizeof(double));
       thread->S = potsynth_aligned_alloc(4 * state->nterm * state->nqp * sizeof(double));
@@ -416,7 +426,7 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
       thread->pm = malloc(3 * state->nqp * sizeof(double));
       thread->p2 = malloc(3 * state->nqp * sizeof(double));
       thread->pe = malloc(3 * state->nqp * sizeof(int));
-      if (!thread->W || !thread->n0 || !thread->src || !thread->Q || !thread->E ||
+      if (!thread->W || !thread->n0 || !thread->src || !thread->Q || (state->needE && !thread->E) ||
           (state->needG && !thread->G) || !thread->acc || !thread->S || !thread->H ||
           !thread->Z || !thread->R || !thread->pm || !thread->p2 || !thread->pe)
         {
@@ -612,8 +622,11 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
   /* recursion + accumulation over node blocks of the first quadrant */
   for (b = 0; b < nqp; b += POTSYNTH_NB)
     {
-      potsynth_alf_column(m, state->xq + b, state->sq + b, thread->Q, thread->E, thread->G,
-                          w->alf_workspace_p);
+      if (state->needE)
+        potsynth_alf_column(m, state->xq + b, state->sq + b, thread->Q, thread->E, thread->G,
+                            w->alf_workspace_p);
+      else
+        potsynth_alf_column_q(m, state->xq + b, thread->Q, thread->G, w->alf_workspace_p);
       potsynth_alf_accum(nn, state->nterm, thread->W, L1, thread->src, thread->n0, thread->Q,
                          thread->E, thread->G, thread->acc);
 
@@ -990,6 +1003,15 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
       free(plist);
       free(pfunc);
       POTSYNTH_ERROR ("unable to allocate components", POTSYNTH_ENOMEM);
+    }
+
+  if (w->C == NULL || w->S == NULL)
+    {
+      /* freed after a fast set-up (setup.c) */
+      free(grp);
+      free(plist);
+      free(pfunc);
+      POTSYNTH_ERROR ("the coefficients of the model were freed after its fast set-up", POTSYNTH_EINVAL);
     }
 
   for (c = 0; c < nfunc; ++c)

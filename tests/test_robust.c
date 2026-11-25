@@ -52,6 +52,22 @@ test_robust(void)
 
   params.method = POTSYNTH_METHOD_FAST;
 
+  /* the coefficients are freed after a fast set-up: functions that need them refuse it
+   * (they read freed memory before) */
+  params.method = POTSYNTH_METHOD_FAST;
+  w = potsynth_mag_alloc(1, L, L, gh, a, rmin, rmax, POTSYNTH_MAG_B, &params);
+  if (w)
+    {
+      double * wn = malloc(w->nfunc * (L + 1) * sizeof(double));
+
+      test_last_error();
+      ps_test_int(potsynth_radial_weights(w, 1, wn), POTSYNTH_EINVAL,
+                  "robust: radial weights of a fast model refused (coefficients freed)");
+      test_last_error();
+      free(wn);
+      potsynth_free(w);
+    }
+
   /* the former name of potsynth_functional still compiles */
   {
     potsynth_channel old = { 0, NULL, POTSYNTH_THETA_P, 0 };

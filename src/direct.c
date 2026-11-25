@@ -65,6 +65,12 @@ potsynth_direct_init(potsynth_workspace * w)
   const size_t nsetr = potsynth_nsetr(w);
   size_t m, l, c, k, p, i, total = 0;
 
+  if (w->C == NULL || w->S == NULL)
+    {
+      /* freed after a fast set-up (setup.c): such a workspace cannot be set up again */
+      POTSYNTH_ERROR ("the coefficients of the model were freed after its fast set-up", POTSYNTH_EINVAL);
+    }
+
   /* terms: functional-major, then the parts of the functional, the terms of the operator
      and the radial functions */
   w->nterm = 0;

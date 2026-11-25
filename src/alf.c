@@ -150,6 +150,57 @@ potsynth_alf_free(potsynth_alf_workspace * w)
   free(w);
 }
 
+/* potsynth_alf_column() without E: the Q (and G) recursion alone, for models whose
+ * terms do not use E (a separate function, so that potsynth_alf_column() compiles as
+ * before and its values do not change in the last bits) */
+void
+potsynth_alf_column_q(const size_t m, const double * restrict x, double * restrict Q, double * restrict G,
+             const potsynth_alf_workspace * w)
+{
+  const size_t lmax = w->lmax;
+  const size_t nn = lmax - m + 1;
+  const double * ab = w->ab + 2 * potsynth_alf_idx(m, m, lmax);
+  size_t k, j;
+
+  for (j = 0; j < POTSYNTH_NB; ++j)
+    {
+      Q[j] = w->qmm[m];
+      if (G)
+        G[j] = 0.0;
+    }
+
+  if (nn == 1)
+    return;
+
+  for (j = 0; j < POTSYNTH_NB; ++j)
+    {
+      Q[POTSYNTH_NB + j] = w->cl[m] * x[j] * Q[j];
+      if (G)
+        G[POTSYNTH_NB + j] = -w->cl[m] * Q[j];
+    }
+
+  for (k = 2; k < nn; ++k)
+    {
+      const double a = ab[2 * k], b = ab[2 * k + 1];
+      const double * restrict q1 = Q + (k - 1) * POTSYNTH_NB;
+      const double * restrict q2 = Q + (k - 2) * POTSYNTH_NB;
+      double * restrict q0 = Q + k * POTSYNTH_NB;
+
+      for (j = 0; j < POTSYNTH_NB; ++j)
+        q0[j] = a * x[j] * q1[j] + b * q2[j];
+
+      if (G)
+        {
+          const double * restrict g1 = G + (k - 1) * POTSYNTH_NB;
+          const double * restrict g2 = G + (k - 2) * POTSYNTH_NB;
+          double * restrict g0 = G + k * POTSYNTH_NB;
+
+          for (j = 0; j < POTSYNTH_NB; ++j)
+            g0[j] = a * (x[j] * g1[j] - q1[j]) + b * g2[j];
+        }
+    }
+}
+
 /*
 potsynth_alf_column()
   Compute one column (fixed m, l = m..lmax) of the ALF recursion at
@@ -160,6 +211,7 @@ Inputs: m - SH order
         s - sin(theta) at the nodes, length POTSYNTH_NB (may be negative)
         Q - (output) Q[(l-m)*POTSYNTH_NB + j] = P(l,0) (m = 0) or scaled Q(l,m) (m > 0)
         E - (output) E[(l-m)*POTSYNTH_NB + j] = dP(l,0)/dtheta (m = 0) or scaled E(l,m) (m > 0)
+            (potsynth_alf_column_q() computes Q and G alone)
         G - (output) G[(l-m)*POTSYNTH_NB + j] = -dQ(l,m)/dx (scaled as Q), or NULL if
             not needed
         w - workspace
@@ -252,7 +304,7 @@ Inputs: nn    - column length, lmax - m + 1
         src   - source of pair k: POTSYNTH_COL_Q, POTSYNTH_COL_E or POTSYNTH_COL_G
         n0    - first index (l - m) of pair k
         Q     - column values from potsynth_alf_column()
-        E     - column values from potsynth_alf_column()
+        E     - column values from potsynth_alf_column(), or NULL if no pair uses E
         G     - column values from potsynth_alf_column(), or NULL if no pair uses G
         acc   - (output) sums, length 4*npair*POTSYNTH_NB:
                 acc[(4k+0)*NB + j] = sum_{l-m even} WA_k[l-m] src_k[l-m][j]
