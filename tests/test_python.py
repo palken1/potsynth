@@ -611,6 +611,18 @@ def test_sets():
         check(err < tol and m.info["ncomp"] == 2, f"SetsModel {method}: {err:.2e}, {m.info['ncomp']} components")
         check(np.array_equal(m.rows(rr, th, ph).T, v), f"SetsModel {method} rows")
 
+    # two terms of one set under the same operator weigh as their sum (here 1 - l/L, which
+    # vanishes at the band edge), not as the sum of their powers: same rank and window
+    lw = np.arange(L + 1.0)
+    kw = dict(a=a, rmin=6700.0, rmax=6900.0, method="fast", eps=1e-11)
+    two = potsynth.SetsModel(coef[:1], 1, L, [potsynth.Output([potsynth.Term(0, "P"),
+                                                               potsynth.Term(0, "P", rfac=-lw / L)], rpow=1)], **kw)
+    one = potsynth.SetsModel(coef[:1], 1, L, [potsynth.Output([potsynth.Term(0, "P", rfac=1.0 - lw / L)],
+                                                              rpow=1)], **kw)
+    check(all(two.info[k] == one.info[k] for k in ("rho", "w", "ncheb")) and
+          abs(two.info["err_radial"] - one.info["err_radial"]) <= 1e-6 * one.info["err_radial"],
+          f"same-operator terms weigh as their sum: {two.info['err_radial']:.3e} {one.info['err_radial']:.3e}")
+
     # a field on the sphere (no radial dependence): radii not needed
     sph = potsynth.Radial(1, None)
     ms = potsynth.SetsModel(coef, 1, L, outs[:1], radial=sph, method="direct")

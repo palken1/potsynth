@@ -775,14 +775,14 @@ fast_row(const size_t row, potsynth_workspace * w)
 }
 
 /*
-sets_msq()
+component_msq()
   Mean square over the sphere of the degree-l, order-m part of a component at
-r = a, for a model with several coefficient sets
+r = a
 
-Inputs: w   - workspace
-        g   - component
-        grp - component of each functional
-        l   - degree
+Inputs: w     - workspace
+        funcs - functionals of the component
+        nf    - number of functionals of the component
+        l     - degree
         m   - order
         idx - index of (l, m) in a coefficient set
 
@@ -792,25 +792,23 @@ with their coefficients before squaring, so that sets which cancel (e.g. the
 difference of two models) give the power of their sum; parts with different
 operators, and different functionals, add in power. With radial functions of the
 caller, each function adds in power.
+2) Each functional counts with its weight in the component (potsynth_func_weight;
+spin 2: the component is (S2A, 2 S2B), with an m-independent norm)
 */
 
 static double
-sets_msq(const potsynth_workspace * w, const size_t g, const size_t * grp, const size_t l, const size_t m,
+component_msq(const potsynth_workspace * w, const size_t * funcs, const size_t nf, const size_t l, const size_t m,
          const size_t idx)
 {
   const size_t L1 = w->lmax + 1;
   const size_t nsetr = potsynth_nsetr(w);
   double msq = 0.0;
-  size_t c, p, p2, j;
+  size_t k, p, p2, j;
 
-  for (c = 0; c < w->nfunc; ++c)
+  for (k = 0; k < nf; ++k)
     {
-      double wt;
-
-      if (grp[c] != g)
-        continue;
-
-      wt = potsynth_func_weight(w, c);
+      const size_t c = funcs[k];
+      const double wt = potsynth_func_weight(w, c);
 
       for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
         {
@@ -877,34 +875,22 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
   const size_t L = w->lmax;
   const size_t L1 = L + 1;
   const size_t nfunc = w->nfunc;
-  const size_t nsetr = potsynth_nsetr(w); /* coefficient sets of a part */
   size_t * grp = malloc(nfunc * sizeof(size_t));
-  size_t * plist = malloc(w->npart * sizeof(size_t));
-  size_t * pfunc = malloc(w->npart * sizeof(size_t));
+  size_t * funcs = malloc(nfunc * sizeof(size_t));
   size_t ngrp, g, c, l, m;
 
-  if (grp == NULL || plist == NULL || pfunc == NULL)
+  if (grp == NULL || funcs == NULL)
     {
       free(grp);
-      free(plist);
-      free(pfunc);
+      free(funcs);
       POTSYNTH_ERROR ("unable to allocate components", POTSYNTH_ENOMEM);
     }
 
   if (potsynth_have_coef(w) != POTSYNTH_SUCCESS)
     {
       free(grp);
-      free(plist);
-      free(pfunc);
+      free(funcs);
       return POTSYNTH_EINVAL; /* reported by potsynth_have_coef() */
-    }
-
-  for (c = 0; c < nfunc; ++c)
-    {
-      size_t p;
-
-      for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
-        pfunc[p] = c;
     }
 
   memset(wn, 0, nfunc * L1 * sizeof(double));
@@ -913,29 +899,19 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
 
   for (g = 0; g < ngrp; ++g)
     {
-      size_t c0 = nfunc, np = 0, s, i;
+      size_t nf = 0, c0;
       double norm = 0.0;
 
-      /* parts of the functionals of the component, ordered by coefficient set and
-         within a set by functional and part (insertion sort: the lists are short) */
       for (c = 0; c < nfunc; ++c)
         {
-          size_t p;
-
-          if (grp[c] != g)
-            continue;
-
-          if (c0 == nfunc)
-            c0 = c;
-
-          for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
-            {
-              for (i = np; i > 0 && w->pset[plist[i - 1]] > w->pset[p]; --i)
-                plist[i] = plist[i - 1];
-              plist[i] = p;
-              ++np;
-            }
+          if (grp[c] == g)
+            funcs[nf++] = c;
         }
+
+      if (nf == 0)
+        continue;
+
+      c0 = funcs[0];
 
       for (l = w->lmin; l <= L; ++l)
         {
@@ -943,57 +919,7 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
           double msq = 0.0;
 
           for (m = 0; m <= M; ++m)
-            {
-              const size_t idx = potsynth_alf_idx(l, m, L);
-
-              if (w->nset > nsetr)
-                {
-                  /* several coefficient sets: parts of a functional with the same operator
-                     add coherently (sets that nearly cancel, such as the difference of
-                     two epochs, give a small weight); different operators and functionals
-                     add in power */
-                  msq += sets_msq(w, g, grp, l, m, idx);
-                  continue;
-                }
-
-              /* sum over the sets of (power of the set) x (sum over its parts) */
-              for (i = 0; i < np; i = s)
-                {
-                  const size_t set = w->pset[plist[i]];
-                  double cs, q = 0.0;
-
-                  if (nsetr == 1)
-                    {
-                      const double C = w->C[set * w->nalf + idx], S = w->S[set * w->nalf + idx];
-                      cs = C * C + S * S;
-                    }
-                  else
-                    {
-                      /* radial functions of the caller: the power of all their sets */
-                      size_t j;
-
-                      cs = 0.0;
-                      for (j = 0; j < nsetr; ++j)
-                        {
-                          const double C = w->C[(set + j) * w->nalf + idx], S = w->S[(set + j) * w->nalf + idx];
-                          cs += C * C + S * S;
-                        }
-                    }
-
-                  for (s = i; s < np && w->pset[plist[s]] == set; ++s)
-                    {
-                      const size_t p = plist[s];
-                      const double rf = w->prfac[p * L1 + l];
-                      /* weight of the functional in its component; spin 2: the component is
-                         (S2A, 2 S2B), with an m-independent norm */
-                      const double wt = potsynth_func_weight(w, pfunc[p]);
-
-                      q += wt * wt * rf * rf * potsynth_op_msq(w->ptheta[p], w->pdphi[p], l, m);
-                    }
-
-                  msq += cs * q;
-                }
-            }
+            msq += component_msq(w, funcs, nf, l, m, potsynth_alf_idx(l, m, L));
 
           wn[c0 * L1 + l] = sqrt(msq);
           norm += msq;
@@ -1007,16 +933,12 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
         }
 
       /* the other functionals of the component share its weights */
-      for (c = c0 + 1; c < nfunc; ++c)
-        {
-          if (grp[c] == g)
-            memcpy(wn + c * L1, wn + c0 * L1, L1 * sizeof(double));
-        }
+      for (c = 1; c < nf; ++c)
+        memcpy(wn + funcs[c] * L1, wn + c0 * L1, L1 * sizeof(double));
     }
 
   free(grp);
-  free(plist);
-  free(pfunc);
+  free(funcs);
 
   return POTSYNTH_SUCCESS;
 }
