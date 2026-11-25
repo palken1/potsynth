@@ -96,18 +96,89 @@ class Channel:
     rfac: object = None
 
 
-def _params(eps, method, nthreads, sigma, w, rank_tol, npts_hint=0, theta_min=0.0, theta_max=0.0):
+# options of every model: name -> default. They are described once, in the documentation of
+# Model, and accepted as keyword arguments by all model classes
+_OPTIONS = {"eps": 1e-10, "method": "auto", "nthreads": 0, "sigma": 0.0, "w": 0, "rank_tol": 0.0,
+            "chunk": 0, "npts_hint": 0, "theta_min": 0.0, "theta_max": 0.0}
+
+OPTIONS_DOC = """
+    Options (keyword arguments of every model class):
+
+    eps : requested accuracy relative to the largest magnitude of each field component
+          (a scalar, or a horizontal vector or tensor; see the documentation), default 1e-10
+    method : "auto" (default), "fast" or "direct"
+    npts_hint : expected number of evaluation points; with "auto", the method with the
+                smaller total time (set-up + evaluation) is chosen (0 = unknown)
+    nthreads : OpenMP threads (0 = all)
+    sigma, w, rank_tol : expert overrides of the oversampling factor, window width and
+                radial SVD tolerance (0 = automatic)
+    chunk : points per internal chunk (0 = default)
+    theta_min, theta_max : colatitude range of the evaluation points in radians
+          (theta_max = 0: pi). The fast method stores only the part of its grid that
+          the range needs; points outside of it raise DomainError
+"""
+
+
+def _options(options):
+    """C parameters and chunk size from the keyword options of a model"""
+    unknown = set(options) - set(_OPTIONS)
+    if unknown:
+        raise TypeError(f"unknown option(s) {sorted(unknown)}; options are {sorted(_OPTIONS)}")
+    o = dict(_OPTIONS, **options)
+    if o["method"] not in _METHODS:
+        raise ValueError(f"method must be one of {sorted(_METHODS)}")
     p = lib.potsynth_default_parameters()
-    p.npts_hint = npts_hint
-    p.theta_min = theta_min
-    p.theta_max = theta_max
-    p.eps = eps
-    p.method = _METHODS[method]
-    p.nthreads = nthreads
-    p.sigma = sigma
-    p.w = w
-    p.rank_tol = rank_tol
-    return p
+    p.eps = o["eps"]
+    p.method = _METHODS[o["method"]]
+    p.nthreads = o["nthreads"]
+    p.sigma = o["sigma"]
+    p.w = o["w"]
+    p.rank_tol = o["rank_tol"]
+    p.npts_hint = o["npts_hint"]
+    p.theta_min = o["theta_min"]
+    p.theta_max = o["theta_max"]
+    return p, o["chunk"]
+
+
+def _lmax_of(n, lmin):
+    """Largest degree of a coefficient vector of length n (orders up to the degree)"""
+    lmax = lmin
+    while nlm(lmin, lmax, lmax) < n:
+        lmax += 1
+    if nlm(lmin, lmax, lmax) != n:
+        raise ValueError(f"{n} coefficients do not form a complete set of degrees {lmin}..")
+    return lmax
+
+
+def _coefficients(coef, lmin, lmax, mmax, name="coef"):
+    """Coefficient vector, lmax and mmax from a vector in the layout of idx() or a tuple
+    (C, S) of arrays indexed [l, m]"""
+    if isinstance(coef, tuple):
+        C, S = coef
+        lmax = np.asarray(C).shape[0] - 1 if lmax is None else lmax
+        mmax = lmax if mmax is None else mmax
+        coef = coef_vector(C, S, lmin=lmin, lmax=lmax, mmax=mmax)
+    else:
+        coef = np.asarray(coef, dtype=float)
+        lmax = _lmax_of(coef.shape[-1], lmin) if lmax is None else lmax
+        mmax = lmax if mmax is None else mmax
+    coef = np.ascontiguousarray(coef, dtype=float)
+    if coef.shape[-1] != nlm(lmin, lmax, mmax):
+        raise ValueError(f"{name} has length {coef.shape[-1]}, expected {nlm(lmin, lmax, mmax)}")
+    if lmax > _lib.LMAX:
+        raise ValueError(f"lmax > {_lib.LMAX} is not supported")
+    return coef, lmax, mmax
+
+
+def _rfac(rfac, lmax, keep, what):
+    """C pointer to per-degree factors (None: 1); the array is kept alive in keep"""
+    if rfac is None:
+        return None
+    rf = np.ascontiguousarray(rfac, dtype=float)
+    if rf.ndim != 1 or rf.size < lmax + 1:
+        raise ValueError(f"{what}.rfac must have length lmax + 1")
+    keep.append(rf)
+    return rf.ctypes.data_as(_lib.c_double_p)
 
 
 class Radial:
@@ -123,6 +194,9 @@ class Radial:
     ----------
     n : number of radial functions
     func : the functions, as one of
+
+        - None, with n = 1: no radial dependence (fields on the sphere; the radii of
+          the points are then not used and may be None);
 
         - a Python function ``func(r)`` that returns ``(first, values)``: the values
           of the functions first, first + 1, ... that are nonzero at the radius r (all
@@ -149,8 +223,15 @@ class Radial:
         self.rmin, self.rmax = rmin, rmax
         self._keep = [func, params]        # referenced by the C structure below
         self._error = None                 # exception raised by a Python function
+        self._sphere = func is None        # no radial dependence: fields on the sphere
 
-        if isinstance(func, ctypes._CFuncPtr):
+        if func is None:
+            if self.n != 1:
+                raise ValueError("func=None (no radial dependence) needs n = 1")
+            self.rmin = 1.0 if rmin is None else rmin
+            self.rmax = 1.0 if rmax is None else rmax
+            address = None
+        elif isinstance(func, ctypes._CFuncPtr):
             address = ctypes.cast(func, ctypes.c_void_p).value
         elif hasattr(func, "address"):
             address = int(func.address)
@@ -321,32 +402,15 @@ class Model(_Evaluator):
     channels : list of Channel
     a : reference radius (same unit as r)
     rmin, rmax : radial range of the evaluation points (required by the fast method)
-    eps : requested accuracy relative to the largest magnitude of each quantity
-          (a scalar channel, or a horizontal vector or tensor part; see the documentation)
-    method : "auto", "fast" or "direct"
-    npts_hint : expected number of evaluation points; with "auto", the method with the
-                smaller total time (set-up + evaluation) is chosen (0 = unknown)
-    nthreads : OpenMP threads (0 = all)
-    sigma, w, rank_tol : expert overrides (0 = automatic)
-    chunk : points per internal chunk (0 = default)
-    theta_min, theta_max : colatitude range of the evaluation points in radians
-          (theta_max = 0: pi). The fast method stores only the part of its grid that
-          the range needs; points outside of it raise DomainError
-
+    """ + OPTIONS_DOC + """
     Calling the model with (r, theta, phi) returns an array of shape
     (len(channels),) + broadcast shape of the inputs; rows(r, theta, phi) returns the
     same values with shape (broadcast shape) + (len(channels),).
     """
 
-    def __init__(self, coef, lmin, lmax, channels, a, rmin=0.0, rmax=0.0, mmax=None, eps=1e-10,
-                 method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0,
-                 theta_min=0.0, theta_max=0.0):
-        mmax = lmax if mmax is None else mmax
-        coef = np.ascontiguousarray(coef, dtype=float)
-        if coef.size != nlm(lmin, lmax, mmax):
-            raise ValueError(f"coef has length {coef.size}, expected {nlm(lmin, lmax, mmax)}")
-        if lmax > _lib.LMAX:
-            raise ValueError(f"lmax > {_lib.LMAX} is not supported")
+    def __init__(self, coef, lmin, lmax, channels, a, rmin=0.0, rmax=0.0, mmax=None, **options):
+        coef, lmax, mmax = _coefficients(coef, lmin, lmax, mmax)
+        p, chunk = _options(options)
 
         chans = (_lib.Channel_t * len(channels))()
         self._rfac = []
@@ -354,20 +418,125 @@ class Model(_Evaluator):
             chans[i].rpow = ch.rpow
             chans[i].theta = _THETA_OPS[ch.theta]
             chans[i].dphi = ch.dphi
-            if ch.rfac is not None:
-                rf = np.ascontiguousarray(ch.rfac, dtype=float)
-                if rf.size < lmax + 1:
-                    raise ValueError("Channel.rfac must have length lmax + 1")
-                self._rfac.append(rf)
-                chans[i].rfac = rf.ctypes.data_as(_lib.c_double_p)
+            chans[i].rfac = _rfac(ch.rfac, lmax, self._rfac, "Channel")
 
-        p = _params(eps, method, nthreads, sigma, w, rank_tol, npts_hint, theta_min, theta_max)
         _lib.clear_error()
         ptr = lib.potsynth_alloc(lmin, lmax, mmax, coef.ctypes.data_as(_lib.c_double_p), a,
                                  rmin, rmax, len(channels), chans, ctypes.byref(p))
         if not ptr:
             _raise(_lib.POTSYNTH_EINVAL, "potsynth_alloc")
         super().__init__(ptr, len(channels), chunk)
+
+    def __call__(self, r, theta, phi):
+        return self._evaluate(r, theta, phi)
+
+
+@dataclass
+class Term:
+    """One term of an Output of a SetsModel,
+
+        fac * rfac[l] * T[Pbar_l^m(cos theta)] (d/dphi)^dphi [C_lm cos(m phi) + S_lm sin(m phi)]
+
+    with the coefficients C, S of the coefficient set `set` (with radial functions: of
+    the sets set, set + 1, ..., one for each radial function). theta and rfac as for
+    Channel.
+    """
+    set: int
+    theta: str = "P"
+    dphi: int = 0
+    fac: float = 1.0
+    rfac: object = None
+
+
+@dataclass
+class Output:
+    """One output of a SetsModel: (a/r)^(l + rpow) times the sum of its terms (with
+    radial functions of the caller: their sum, and rpow is not used).
+
+    The terms must form one field component: all with the same operator, or the two
+    operators ("dP", dphi=0) and ("Psin", dphi=1) of a horizontal vector, or, with a
+    component and a weight given, ("S2A", dphi=0) and ("S2B", dphi=1) of a horizontal
+    tensor. component: outputs with the same value > 0 form one component, and eps is
+    relative to the largest magnitude of each component (0: chosen by the library);
+    weight: the weight of the output in the magnitude of its component (0: chosen).
+    """
+    terms: list
+    rpow: int = 0
+    component: int = 0
+    weight: float = 0.0
+
+
+class SetsModel(_Evaluator):
+    """Model with several coefficient sets: each output is a sum of terms, and each
+    term applies one operator to one set. All outputs share one grid of the fast
+    method, so many fields, or fields that are not gradients of one potential, are
+    evaluated with one window sum per point.
+
+    Parameters
+    ----------
+    coef : array of shape (nset, nlm), 4-pi fully normalised coefficients of each set
+           in the layout of idx(), nlm = nlm(lmin, lmax, mmax)
+    lmin, lmax, mmax : degree range and maximum order (lmax from nlm if None; mmax
+           defaults to lmax)
+    outputs : list of Output
+    a : reference radius (same unit as r); not used with radial functions
+    rmin, rmax : radial range of the evaluation points (required by the fast method;
+           default with radial functions: their range)
+    radial : radial functions of the caller (Radial), in place of the powers of a/r,
+           or None
+    """ + OPTIONS_DOC + """
+    Calling the model with (r, theta, phi) returns an array of shape
+    (len(outputs),) + broadcast shape of the inputs; rows() as for Model.
+    """
+
+    def __init__(self, coef, lmin, lmax, outputs, a=1.0, rmin=None, rmax=None, mmax=None, radial=None,
+                 **options):
+        coef = np.asarray(coef, dtype=float)
+        if coef.ndim != 2:
+            raise ValueError("coef must have shape (nset, nlm)")
+        coef, lmax, mmax = _coefficients(coef, lmin, lmax, mmax)
+        nset = coef.shape[0]
+        p, chunk = _options(options)
+
+        if radial is not None:
+            rmin = radial.rmin if rmin is None else rmin
+            rmax = radial.rmax if rmax is None else rmax
+            if rmin is None or rmax is None:
+                raise ValueError("rmin and rmax must be given (here or in the Radial object)")
+        rmin = 0.0 if rmin is None else rmin
+        rmax = 0.0 if rmax is None else rmax
+
+        self._radial = radial              # keeps the C structures of the radial functions alive
+        self._rfac = []
+        outs = (_lib.Output_t * len(outputs))()
+        self._terms = []
+        for i, o in enumerate(outputs):
+            if not o.terms:
+                raise ValueError("an Output needs at least one Term")
+            terms = (_lib.Term_t * len(o.terms))()
+            for k, t in enumerate(o.terms):
+                if t.theta not in _THETA_OPS:
+                    raise ValueError(f"unknown operator {t.theta!r}; use {sorted(_THETA_OPS)}")
+                terms[k].set = t.set
+                terms[k].fac = t.fac
+                terms[k].rfac = _rfac(t.rfac, lmax, self._rfac, "Term")
+                terms[k].theta = _THETA_OPS[t.theta]
+                terms[k].dphi = t.dphi
+            self._terms.append(terms)
+            outs[i].rpow = o.rpow
+            outs[i].nterm = len(o.terms)
+            outs[i].term = terms
+            outs[i].component = o.component
+            outs[i].weight = o.weight
+
+        _lib.clear_error()
+        ptr = lib.potsynth_alloc_sets(lmin, lmax, mmax, nset, coef.ctypes.data_as(_lib.c_double_p), a, rmin, rmax,
+                                      None if radial is None else ctypes.byref(radial._c),
+                                      len(outputs), outs, ctypes.byref(p))
+        if not ptr:
+            _raise(_lib.POTSYNTH_EINVAL, "potsynth_alloc_sets")
+        super().__init__(ptr, len(outputs), chunk, needs_r=not (radial is not None and radial.n == 1 and
+                                                                radial._sphere))
 
     def __call__(self, r, theta, phi):
         return self._evaluate(r, theta, phi)

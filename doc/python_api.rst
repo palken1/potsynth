@@ -27,7 +27,7 @@ evaluated. To build and load the library, see :ref:`installation <python-install
 Magnetic models
 ===============
 
-.. py:class:: MagModel(gh, lmax=None, lmin=1, mmax=None, a=6371.2, rmin=0.0, rmax=0.0, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0, quantities="B", theta_min=0.0, theta_max=0.0)
+.. py:class:: MagModel(gh, lmax=None, lmin=1, mmax=None, a=6371.2, rmin=0.0, rmax=0.0, quantities="B", **options)
 
    An internal magnetic field model :math:`\mathbf{B} = -\nabla V`, where :math:`V` is
    given by Schmidt semi-normalized Gauss coefficients (:eq:`mag_potential`), and
@@ -46,23 +46,10 @@ Magnetic models
       Required by the fast method; ignored by the direct method.
    :param float rmax: largest radius (km) at which the model will be evaluated, as for
       ``rmin``
-   :param float eps: requested accuracy, relative to the largest magnitude of each
-      quantity (:math:`B_r`, and :math:`\mathbf{B}_h = (B_\theta, B_\phi)`; see :ref:`accuracy`)
-   :param str method: ``"auto"``, ``"fast"`` or ``"direct"``
-   :param int npts_hint: expected number of evaluation points. With ``method="auto"``,
-      the method with the smaller total time (set-up plus evaluation) is chosen; 0 means
-      unknown (see :ref:`choosing-method`).
-   :param int nthreads: OpenMP threads; 0 means all
-   :param float sigma: expert override: oversampling factor; 0 means automatic
-   :param int w: expert override: window width; 0 means automatic
-   :param float rank_tol: expert override: radial SVD tolerance; 0 means automatic
-   :param int chunk: points per internal chunk; 0 means the default
+   :param options: see :ref:`python-options`
    :param quantities: ``"B"`` (the field, nT) and/or ``"gradB"`` (the gradient tensor
       :math:`\nabla\mathbf{B} = -\nabla\nabla V`, nT/km), as a list or a
       comma-separated string
-   :param float theta_min: smallest colatitude (radians) at which the model will be
-      evaluated; see :ref:`python-regions`
-   :param float theta_max: largest colatitude (radians); 0 means :math:`\pi`
 
    The set-up is done in the constructor. Choose :math:`[r_{\min}, r_{\max}]` as
    tight as the data allow.
@@ -121,7 +108,7 @@ Magnetic models
 Gravity models
 ==============
 
-.. py:class:: GravModel(coef, GM, a, lmax=None, lmin=0, mmax=None, quantities="V,g", rmin=0.0, rmax=0.0, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0, theta_min=0.0, theta_max=0.0)
+.. py:class:: GravModel(coef, GM, a, lmax=None, lmin=0, mmax=None, quantities="V,g", rmin=0.0, rmax=0.0, **options)
 
    A gravity field model: the gravitational potential :eq:`grav_potential` and the
    acceleration :math:`\mathbf{g} = \nabla V`. Only the synthesis is computed: no
@@ -148,8 +135,8 @@ Gravity models
       Required by the fast method; ignored by the direct method.
    :param float rmax: largest radius (m), as for ``rmin``
 
-   The other arguments are as for :py:class:`MagModel`; ``eps`` applies to each
-   quantity separately.
+   :param options: see :ref:`python-options`; ``eps`` applies to each quantity
+      separately
 
    .. py:method:: __call__(r, theta, phi)
 
@@ -278,11 +265,12 @@ Generic models
    :param rfac: per-degree factors :math:`\rho(l)`, length :math:`L+1`, or ``None``
       for 1
 
-.. py:class:: Model(coef, lmin, lmax, channels, a, rmin=0.0, rmax=0.0, mmax=None, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0, theta_min=0.0, theta_max=0.0)
+.. py:class:: Model(coef, lmin, lmax, channels, a, rmin=0.0, rmax=0.0, mmax=None, **options)
 
    A model with user-defined channels. ``coef`` holds the 4-:math:`\pi` fully
    normalized coefficients as a vector (see :py:func:`coef_vector`), and ``lmin``
-   may be 0. The other arguments are as for :py:class:`MagModel`.
+   may be 0. ``a``, ``rmin`` and ``rmax`` are as for :py:class:`MagModel`, in the
+   unit of the radii; the options are described in :ref:`python-options`.
 
    Calling the model with ``(r, theta, phi)`` returns an array of shape
    ``(len(channels),) + shape``. :py:attr:`MagModel.info` is also available.
@@ -297,10 +285,55 @@ Generic models
       model = potsynth.Model(coef, 0, L, chans, a, rmin, rmax)
       V, dV = model(r, theta, phi)
 
+.. py:class:: SetsModel(coef, lmin, lmax, outputs, a=1.0, rmin=None, rmax=None, mmax=None, radial=None, **options)
+
+   A model with several coefficient sets (see :c:func:`potsynth_alloc_sets`): each
+   output is a sum of terms, and each term applies one operator to one set. All outputs
+   share one grid, so many fields, or fields that are not gradients of one potential,
+   are evaluated with one sum per point.
+
+   :param coef: array of shape ``(nset, nlm)``: the 4-:math:`\pi` fully normalized
+      coefficients of each set in the layout of :py:func:`idx`
+   :param outputs: list of :py:class:`Output`
+   :param radial: radial functions of the caller (:py:class:`Radial`) in place of the
+      powers of :math:`a/r`, or ``None``. With radial functions a term's ``set`` is the
+      first of ``radial.n`` consecutive sets, one for each function, and ``a`` and
+      ``rpow`` are not used
+   :param rmin, rmax: radius range of the points; with radial functions by default
+      theirs
+
+   Calling the model returns an array of shape ``(len(outputs),) + shape``.
+
+.. py:class:: Output(terms, rpow=0, component=0, weight=0.0)
+
+   One output: :math:`(a/r)^{l+p}` times the sum of its terms. The terms must form one
+   field component: all with the same operator, or ``("dP", dphi=0)`` and ``("Psin",
+   dphi=1)`` (a horizontal vector), or, with ``component`` and ``weight`` given,
+   ``("S2A", dphi=0)`` and ``("S2B", dphi=1)`` (a horizontal tensor). Outputs with the
+   same ``component`` :math:`> 0` form one component for the accuracy; 0 lets the
+   library choose. ``weight`` is the weight of the output in the magnitude of its
+   component (0: chosen by the library).
+
+.. py:class:: Term(set, theta="P", dphi=0, fac=1.0, rfac=None)
+
+   One term: ``fac * rfac[l]`` times the operator ``theta`` (as for :py:class:`Channel`)
+   applied to coefficient set ``set``.
+
+   Example: the horizontal components of a vector field
+   :math:`\sum b_{lm}\boldsymbol\Psi_{lm} + c_{lm}\boldsymbol\Phi_{lm}` with ``b`` and
+   ``c`` as sets 0 and 1:
+
+   .. code-block:: python
+
+      T, O = potsynth.Term, potsynth.Output
+      outputs = [O([T(0, "dP"), T(1, "Psin", dphi=1, fac=-1.0)]),     # V_theta
+                 O([T(0, "Psin", dphi=1), T(1, "dP")])]               # V_phi
+      model = potsynth.SetsModel(np.stack([b, c]), 1, L, outputs, a, rmin, rmax)
+
 Vector fields
 =============
 
-.. py:class:: VshModel(a=None, b=None, c=None, lmax=None, lmin=1, mmax=None, norm="schmidt", quantities="V", radial=None, rmin=None, rmax=None, eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0, theta_min=0.0, theta_max=0.0)
+.. py:class:: VshModel(a=None, b=None, c=None, lmax=None, lmin=1, mmax=None, norm="schmidt", quantities="V", radial=None, rmin=None, rmax=None, **options)
 
    Vector fields given by vector spherical harmonic coefficients, which need not be
    gradients of a potential (see :ref:`vsh-frontend` for the definition of the fields
@@ -321,10 +354,9 @@ Vector fields
    :param radial: radial functions (a :py:class:`Radial`), or ``None`` for fields on
       the sphere
    :param rmin, rmax: radius range of the points; by default that of ``radial``
-   :param float eps: accuracy relative to the largest magnitude of each component of
-      each field (:math:`V_r`; the horizontal vector; the divergence; the curl)
-
-   The other arguments are as for :py:class:`MagModel`.
+   :param options: see :ref:`python-options`; ``eps`` is relative to the largest
+      magnitude of each component of each field (:math:`V_r`; the horizontal vector;
+      the divergence; the curl)
 
    Calling the model with ``(r, theta, phi)`` returns an array of shape
    ``(nexp, nout) + shape``, with the outputs of each field in the order
@@ -365,6 +397,9 @@ degree. A :py:class:`VshModel` takes its radial functions from the caller (see
       integer address, a ctypes pointer or structure, or a NumPy array (its data)
    :param rmin, rmax: range of radii in which the functions are defined; the default
       radius range of a model that uses them
+
+   ``func=None`` with ``n = 1`` means no radial dependence: fields on the sphere, for
+   which the radii of the points are not used and may be ``None``.
 
    **A Python function** ``func(r)`` returns ``(first, values)``: the values of the
    functions ``first, first + 1, ...`` that are nonzero at the radius ``r``; all others
@@ -459,6 +494,36 @@ with the same values, and a point outside the range raises
    A model read from a file. Calling it with ``(r, theta, phi)`` gives an array of shape
    ``(nout,) + shape`` with the outputs in the order of the model that was written;
    :py:meth:`Model.rows` and ``info`` are available.
+
+.. _python-options:
+
+Options
+=======
+
+All model classes accept these keyword arguments:
+
+``eps``
+   Requested accuracy, relative to the largest magnitude of each field component (a
+   scalar, or a horizontal vector or tensor; see :ref:`accuracy`). Default
+   :math:`10^{-10}`.
+``method``
+   ``"auto"`` (default), ``"fast"`` or ``"direct"``.
+``npts_hint``
+   Expected number of evaluation points. With ``method="auto"``, the method with the
+   smaller total time (set-up plus evaluation) is chosen; 0 means unknown (see
+   :ref:`choosing-method`).
+``nthreads``
+   OpenMP threads; 0 means all.
+``sigma``, ``w``, ``rank_tol``
+   Expert overrides of the oversampling factor, the window width and the radial SVD
+   tolerance; 0 means automatic.
+``chunk``
+   Points per internal chunk; 0 means the default.
+``theta_min``, ``theta_max``
+   Colatitude range of the evaluation points in radians (``theta_max = 0`` means
+   :math:`\pi`); see :ref:`python-regions`.
+
+An unknown keyword raises ``TypeError``.
 
 Coefficients
 ============

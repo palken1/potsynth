@@ -8,7 +8,7 @@ import numpy as np
 
 from . import _lib
 from ._lib import lib
-from .core import _Evaluator, _params, _raise, nlm
+from .core import OPTIONS_DOC, _coefficients, _Evaluator, _options, _raise
 
 _NORMS = {"full": _lib.VSH_NORM_FULL, "schmidt": _lib.VSH_NORM_SCHMIDT}
 _QUANTITIES = {"V": (_lib.VSH_V, ("V_r", "V_theta", "V_phi")),
@@ -32,6 +32,11 @@ def _flags(quantities):
     if not flags:
         raise ValueError("no quantities requested")
     return flags, tuple(n for n in _ORDER if n in names)
+
+
+def _first_given(a, b, c):
+    """The first of a, b, c that is given (only its last dimension is used)"""
+    return next(x for x in (a, b, c) if x is not None)
 
 
 class VshModel(_Evaluator):
@@ -64,10 +69,9 @@ class VshModel(_Evaluator):
         sphere; the radii of the points are then not used and may be None
     rmin, rmax : radius range of the evaluation points, within the range of the radial
         functions (default: rmin and rmax of the Radial object)
-    eps : accuracy relative to the largest magnitude of each component of each field
-        (V_r; the horizontal vector; the divergence; the curl)
-    method, npts_hint, nthreads, sigma, w, rank_tol, chunk, theta_min, theta_max : as
-        for potsynth.Model
+    """ + OPTIONS_DOC + """
+    eps is relative to the largest magnitude of each component of each field (V_r; the
+    horizontal vector; the divergence; the curl).
 
     Calling the model with (r, theta, phi) returns an array of shape
     (nexp, nout) + shape of the points, with nout the number of outputs per field
@@ -77,9 +81,7 @@ class VshModel(_Evaluator):
     """
 
     def __init__(self, a=None, b=None, c=None, lmax=None, lmin=1, mmax=None, norm="schmidt",
-                 quantities="V", radial=None, rmin=None, rmax=None, eps=1e-10, method="auto",
-                 nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0, npts_hint=0,
-                 theta_min=0.0, theta_max=0.0):
+                 quantities="V", radial=None, rmin=None, rmax=None, **options):
         flags, names = _flags(quantities)
         if norm not in _NORMS:
             raise ValueError("norm must be 'schmidt' or 'full'")
@@ -105,17 +107,9 @@ class VshModel(_Evaluator):
         shapes = {x.shape for x in (a, b, c) if x is not None}
         if len(shapes) != 1:
             raise ValueError("a, b and c must have the same shape")
-        nexp, _, n = shapes.pop()
-
-        if lmax is None:
-            lmax = lmin
-            while nlm(lmin, lmax, lmax) < n:
-                lmax += 1
-        mmax = lmax if mmax is None else mmax
-        if n != nlm(lmin, lmax, mmax):
-            raise ValueError(f"coefficients have length {n}, expected {nlm(lmin, lmax, mmax)}")
-        if lmax > _lib.LMAX:
-            raise ValueError(f"lmax > {_lib.LMAX} is not supported")
+        nexp = shapes.pop()[0]
+        _, lmax, mmax = _coefficients(_first_given(a, b, c), lmin, lmax, mmax, "coefficients")
+        p, chunk = _options(options)
 
         if radial is not None:
             rmin = radial.rmin if rmin is None else rmin
@@ -127,7 +121,6 @@ class VshModel(_Evaluator):
 
         self._radial = radial           # keeps the C structures of the radial functions alive
         ptr = lambda x: None if x is None else x.ctypes.data_as(_lib.c_double_p)
-        p = _params(eps, method, nthreads, sigma, w, rank_tol, npts_hint, theta_min, theta_max)
         _lib.clear_error()
         w_ptr = lib.potsynth_vsh_alloc(lmin, lmax, mmax, nexp, ptr(a), ptr(b), ptr(c), _NORMS[norm],
                                        flags, rmin, rmax,

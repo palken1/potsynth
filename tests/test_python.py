@@ -538,6 +538,56 @@ def test_vsh():
     print("  vsh, radial functions, rows, model files and colatitude range checks done")
 
 
+def test_sets():
+    """General models with several coefficient sets, options handling"""
+    rng = np.random.default_rng(3)
+    L, N = 16, 300
+    n = potsynth.nlm(1, L)
+    th = np.arccos(rng.uniform(-1.0, 1.0, N))
+    ph = rng.uniform(0.0, 2.0 * np.pi, N)
+    rr = rng.uniform(6700.0, 6900.0, N)
+    coef = rng.normal(size=(2, n)) * 0.9 ** np.arange(n)[None, :]
+
+    # 2 x set 0 - 3 x set 1 under P, and a horizontal vector of the two sets, against channels
+    outs = [potsynth.Output([potsynth.Term(0, "P", fac=2.0), potsynth.Term(1, "P", fac=-3.0)], rpow=1),
+            potsynth.Output([potsynth.Term(0, "dP"), potsynth.Term(1, "Psin", dphi=1, fac=-1.0)], rpow=1),
+            potsynth.Output([potsynth.Term(0, "Psin", dphi=1), potsynth.Term(1, "dP")], rpow=1)]
+    ch = [potsynth.Channel(1, "P"), potsynth.Channel(1, "dP"), potsynth.Channel(1, "Psin", dphi=1)]
+    a = 6371.2
+    c0 = potsynth.Model(coef[0], 1, L, ch, a, method="direct")(rr, th, ph)
+    c1 = potsynth.Model(coef[1], 1, L, ch, a, method="direct")(rr, th, ph)
+    ref = np.array([2.0 * c0[0] - 3.0 * c1[0], c0[1] - c1[2], c0[2] + c1[1]])
+    for method, tol in (("direct", 1e-13), ("fast", 3e-11)):
+        m = potsynth.SetsModel(coef, 1, L, outs, a=a, rmin=6700.0, rmax=6900.0, method=method, eps=1e-11)
+        v = m(rr, th, ph)
+        err = max(np.max(np.abs(v[k] - ref[k])) / np.max(np.abs(ref[k])) for k in range(3))
+        check(err < tol and m.info["ncomp"] == 2, f"SetsModel {method}: {err:.2e}, {m.info['ncomp']} components")
+        check(np.array_equal(m.rows(rr, th, ph).T, v), f"SetsModel {method} rows")
+
+    # a field on the sphere (no radial dependence): radii not needed
+    sph = potsynth.Radial(1, None)
+    ms = potsynth.SetsModel(coef, 1, L, outs[:1], radial=sph, method="direct")
+    v = ms(None, th, ph)[0]
+    one = np.ones(N)
+    r1 = 2.0 * potsynth.Model(coef[0], 1, L, ch[:1], 1.0, method="direct")(one, th, ph)[0] \
+        - 3.0 * potsynth.Model(coef[1], 1, L, ch[:1], 1.0, method="direct")(one, th, ph)[0]
+    check(np.max(np.abs(v - r1)) < 1e-12 * np.max(np.abs(r1)), "SetsModel on the sphere")
+
+    # errors: mixed component, unknown option, unknown operator
+    for bad, kind in ((lambda: potsynth.SetsModel(coef, 1, L, [potsynth.Output([potsynth.Term(0, "P"),
+                                                                                  potsynth.Term(1, "dP")])],
+                                                   method="direct"), potsynth.PotsynthError),
+                      (lambda: potsynth.MagModel(coef[0], lmax=L, rmin=6700.0, rmax=6900.0, epsilon=1e-6), TypeError),
+                      (lambda: potsynth.SetsModel(coef, 1, L, [potsynth.Output([potsynth.Term(0, "Q")])]), ValueError)):
+        try:
+            bad()
+            check(False, f"invalid model accepted ({kind.__name__})")
+        except kind:
+            pass
+
+    print("  sets and options checks done")
+
+
 def test_version():
     # the Python package and the C library carry the same version
     import re
@@ -556,5 +606,6 @@ if __name__ == "__main__":
     test_hessian()
     test_geodesy()
     test_vsh()
+    test_sets()
     print("FAILED" if nfail else "all passed")
     sys.exit(1 if nfail else 0)

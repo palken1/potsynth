@@ -42,7 +42,6 @@
 #define POTSYNTH_ALF_SCALEMAX        1000   /* largest power-of-2 column scaling (bounds the degree) */
 #define POTSYNTH_WMAX                16     /* largest window width in the calibration tables */
 #define POTSYNTH_AUTO_LMIN           24     /* METHOD_AUTO uses the fast method for lmax >= this */
-#define POTSYNTH_OMAP_MAX            16     /* largest number of channels with an output map */
 
 /* report an error through the error handler and return */
 #define POTSYNTH_ERROR(reason, potsynth_errno) \
@@ -195,6 +194,7 @@ struct potsynth_eval_workspace
   double * tscratch;    /* per-thread scratch space, nthreads * tstride */
   size_t tstride;       /* doubles of scratch per thread */
   double * rscratch;    /* radial functions of the caller at a point (validation), length nrad, or NULL */
+  double * oscratch;    /* channel values of a point for the output map, nthreads * nchan, or NULL */
 };
 
 /* exponential of semicircle window phi(z) = exp(beta (sqrt(1 - z^2) - 1)) */

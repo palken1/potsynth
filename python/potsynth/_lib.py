@@ -42,6 +42,22 @@ class Channel_t(ctypes.Structure):
                 ("dphi", ctypes.c_int)]
 
 
+class Term_t(ctypes.Structure):
+    _fields_ = [("set", ctypes.c_size_t),
+                ("fac", ctypes.c_double),
+                ("rfac", c_double_p),
+                ("theta", ctypes.c_int),
+                ("dphi", ctypes.c_int)]
+
+
+class Output_t(ctypes.Structure):
+    _fields_ = [("rpow", ctypes.c_int),
+                ("nterm", ctypes.c_size_t),
+                ("term", ctypes.POINTER(Term_t)),
+                ("component", ctypes.c_int),
+                ("weight", ctypes.c_double)]
+
+
 # radial functions of the caller: int f(double r, size_t * first, size_t * n, double * f, double * df, void * params)
 RADIAL_FN_T = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_double, ctypes.POINTER(ctypes.c_size_t),
                                ctypes.POINTER(ctypes.c_size_t), c_double_p, c_double_p, ctypes.c_void_p)
@@ -222,6 +238,11 @@ lib.potsynth_eval.argtypes = [ctypes.c_size_t, c_double_p, c_double_p, c_double_
 
 lib.potsynth_get_info.restype = ctypes.c_int
 lib.potsynth_get_info.argtypes = [ctypes.POINTER(Info_t), ctypes.c_void_p]
+
+lib.potsynth_alloc_sets.restype = ctypes.c_void_p
+lib.potsynth_alloc_sets.argtypes = [ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, c_double_p,
+                                    ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.POINTER(Radial_t),
+                                    ctypes.c_size_t, ctypes.POINTER(Output_t), ctypes.POINTER(Params_t)]
 
 lib.potsynth_eval_rows.restype = ctypes.c_int
 lib.potsynth_eval_rows.argtypes = [ctypes.c_size_t, c_double_p, c_double_p, c_double_p, c_double_p,

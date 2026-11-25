@@ -757,7 +757,7 @@ Notes:
 int
 potsynth_set_outputs(potsynth_workspace * w, const size_t nout, const double * map)
 {
-  if (nout < w->nchan || w->nchan > POTSYNTH_OMAP_MAX || nout > POTSYNTH_OMAP_MAX)
+  if (nout < w->nchan || map == NULL)
     {
       POTSYNTH_ERROR ("invalid output map", POTSYNTH_EINVAL);
     }

@@ -1174,8 +1174,9 @@ channels form, with the weights of the channels (potsynth_chan_weight()).
 
 4) A model with more than CHECK_MAXCOMP components (many fields on one grid) is
 checked for the CHECK_MAXCOMP components with the largest share of their power
-in the highest eighth of the degrees, where the window error is largest, with
-CHECK_TOP_MANY nodes per channel. The direct sum is computed for the channels of
+in the highest eighth of the degrees, where the window error is largest. A model
+with more than CHECK_BUDGET / CHECK_TOP channels to check gets fewer candidate
+nodes per channel (at least CHECK_TOP_MANY). The direct sum is computed for the channels of
 the checked components only, so that the cost of the check does not grow with
 the number of fields.
 */
@@ -1183,7 +1184,9 @@ the number of fields.
 #define CHECK_TOP      16   /* candidate nodes per channel */
 #define CHECK_NRAND    256  /* random points */
 #define CHECK_MAXCOMP  64   /* components checked of a model with more components */
-#define CHECK_TOP_MANY 2    /* candidate nodes per channel of such a model */
+#define CHECK_TOP_MANY 2    /* least candidate nodes per channel */
+#define CHECK_BUDGET   256  /* candidate nodes of all channels, unless that leaves fewer than
+                               CHECK_TOP_MANY per channel */
 #define CHECK_CHUNK    256  /* points per evaluation of the fast method */
 
 double
@@ -1216,7 +1219,10 @@ potsynth_fast_check(potsynth_workspace * w)
       ngrp = potsynth_quantities(w, grp);
       nsel = check_select(w, grp, ngrp, sel);
       ok = (nsel > 0);
-      ctop = (ngrp > CHECK_MAXCOMP) ? CHECK_TOP_MANY : CHECK_TOP;
+      /* candidates per channel: CHECK_TOP, fewer when there are many channels, so that
+         the number of check points (and the cost of their direct sum) stays bounded */
+      ctop = CHECK_BUDGET / nsel;
+      ctop = (ctop > CHECK_TOP) ? CHECK_TOP : ((ctop < CHECK_TOP_MANY) ? CHECK_TOP_MANY : ctop);
       ntop = nsel * ctop;
     }
 

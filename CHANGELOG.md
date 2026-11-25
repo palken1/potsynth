@@ -84,7 +84,10 @@ First public release.
 - `potsynth` package (ctypes and NumPy): `MagModel`, `GravModel`, the generic `Model`,
   readers, geodetic helpers and tensor rotations.
 - `VshModel`, with radial functions of the caller (`Radial`) given as a Python function
-  or as a compiled one (ctypes, numba, Cython);
+  or as a compiled one (ctypes, numba, Cython); `SetsModel` with `Output` and `Term`
+  for general models with several coefficient sets; the options of all models
+  (`eps`, `method`, ..., `theta_min`, `theta_max`) are keyword arguments handled in
+  one place, and an unknown one is an error;
   `rows()` (the outputs of a point next to each other), the colatitude range
   (`theta_min`, `theta_max`) and model files (`write()`, `potsynth.read()`) for all models.
 - Wheels for Linux (x86-64, aarch64), macOS (arm64, x86-64) and Windows (AMD64). The

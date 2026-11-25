@@ -222,7 +222,7 @@ potsynth_read(const char * filename, const potsynth_radial * radial, const int n
   ok = (w->nchan > 0 && rad->rho > 0 && rad->ncheb > 0 && w->nch == w->nchan * rad->rho &&
         w->nchp >= w->nch && w->nchp % POTSYNTH_CHAN_ALIGN == 0 && w->w >= 2 && w->w <= 32 &&
         w->nrows == (size_t) (w->row_hi - w->row_lo + 1) && w->ncols == (size_t) (w->col_hi - w->col_lo + 1) &&
-        w->nout >= w->nchan && (!hu[16] || (w->nchan <= POTSYNTH_OMAP_MAX && w->nout <= POTSYNTH_OMAP_MAX)) &&
+        w->nout >= w->nchan && w->nout <= 2 * w->nchan &&
         (hu[16] || w->nout == w->nchan));
 
   if (ok)

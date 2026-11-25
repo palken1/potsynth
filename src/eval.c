@@ -117,7 +117,11 @@ potsynth_eval_alloc(const size_t chunk, const potsynth_workspace * w)
   if (w->nrad > 0)
     ew->rscratch = malloc(w->nrad * sizeof(double));
 
-  if (ew->tscratch == NULL || (w->nrad > 0 && ew->rscratch == NULL))
+  /* channel values of a point for the output map, one row per thread */
+  if (w->omap != NULL)
+    ew->oscratch = malloc((size_t) ew->nthreads * w->nchan * sizeof(double));
+
+  if (ew->tscratch == NULL || (w->nrad > 0 && ew->rscratch == NULL) || (w->omap != NULL && ew->oscratch == NULL))
     {
       potsynth_eval_free(ew);
       POTSYNTH_ERROR_NULL ("unable to allocate thread scratch", POTSYNTH_ENOMEM);
@@ -143,6 +147,9 @@ potsynth_eval_free(potsynth_eval_workspace * ew)
 
   if (ew->rscratch)
     free(ew->rscratch);
+
+  if (ew->oscratch)
+    free(ew->oscratch);
 
   free(ew);
 }
@@ -275,7 +282,11 @@ eval_outputs(const size_t n, const int rows, double * out, potsynth_eval_workspa
   for (ii = 0; ii < (long) n; ++ii)
     {
       const size_t i = (size_t) ii;
-      double v[POTSYNTH_OMAP_MAX];
+#ifdef _OPENMP
+      double * v = ew->oscratch + (size_t) omp_get_thread_num() * nchan;
+#else
+      double * v = ew->oscratch;
+#endif
       size_t c, k;
 
       for (c = 0; c < nchan; ++c)

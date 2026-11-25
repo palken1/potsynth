@@ -11,7 +11,7 @@ import numpy as np
 
 from . import _lib
 from ._lib import lib
-from .core import _Evaluator, _params, _raise, coef_vector, nlm
+from .core import OPTIONS_DOC, _coefficients, _Evaluator, _options, _raise, nlm
 
 MAG_B = 0x1
 MAG_GRADB = 0x2
@@ -80,38 +80,19 @@ class MagModel(_Evaluator):
                  nT/km), as a list or a comma-separated string (default "B")
     rmin, rmax : radial range in km of the evaluation points (required by the fast
                  method; default: none, i.e. direct method only)
-    eps, method, npts_hint, nthreads, sigma, w, rank_tol, chunk, theta_min, theta_max : as for
-        potsynth.Model
-
+    """ + OPTIONS_DOC + """
     Calling the model with (r [km], theta [rad, colatitude], phi [rad]) returns a named
     tuple with the requested quantities, in the order B_r, B_theta, B_phi (nT), then
     dB_rr, dB_rt, dB_rp, dB_tt, dB_tp, dB_pp (nT/km), each with the broadcast shape of
     the inputs.
     """
 
-    def __init__(self, gh, lmax=None, lmin=1, mmax=None, a=6371.2, rmin=0.0, rmax=0.0,
-                 eps=1e-10, method="auto", nthreads=0, sigma=0.0, w=0, rank_tol=0.0, chunk=0,
-                 npts_hint=0, quantities="B", theta_min=0.0, theta_max=0.0):
+    def __init__(self, gh, lmax=None, lmin=1, mmax=None, a=6371.2, rmin=0.0, rmax=0.0, quantities="B",
+                 **options):
         flags, names = _mag_flags(quantities)
-        if isinstance(gh, tuple):
-            g, h = gh
-            lmax = np.asarray(g).shape[0] - 1 if lmax is None else lmax
-            mmax = lmax if mmax is None else mmax
-            gh = coef_vector(g, h, lmin=lmin, lmax=lmax, mmax=mmax)
-        else:
-            gh = np.asarray(gh, dtype=float)
-            if lmax is None:
-                lmax = lmin
-                while nlm(lmin, lmax, lmax) < gh.size:
-                    lmax += 1
-            mmax = lmax if mmax is None else mmax
-        gh = np.ascontiguousarray(gh, dtype=float)
-        if gh.size != nlm(lmin, lmax, mmax):
-            raise ValueError(f"gh has length {gh.size}, expected {nlm(lmin, lmax, mmax)}")
-        if lmax > _lib.LMAX:
-            raise ValueError(f"lmax > {_lib.LMAX} is not supported")
+        gh, lmax, mmax = _coefficients(gh, lmin, lmax, mmax, "gh")
+        p, chunk = _options(options)
 
-        p = _params(eps, method, nthreads, sigma, w, rank_tol, npts_hint, theta_min, theta_max)
         _lib.clear_error()
         ptr = lib.potsynth_mag_alloc(lmin, lmax, mmax, gh.ctypes.data_as(_lib.c_double_p), a,
                                      rmin, rmax, flags, ctypes.byref(p))
