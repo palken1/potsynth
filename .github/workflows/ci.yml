@@ -52,6 +52,7 @@ jobs:
           $exe | tail -3
 
   # release, shared, generic scalar kernels, AddressSanitizer + UBSan, ThreadSanitizer
+  # without OpenMP (GCC) and with OpenMP (clang, libomp, Archer)
   sanitizers:
     name: ubuntu check.sh (all configurations)
     runs-on: ubuntu-latest
@@ -60,10 +61,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Install NumPy and GSL (optional comparison test)
+      - name: Install NumPy, GSL (optional comparison test), clang and libomp (tsan-omp)
         run: |
           python -m pip install numpy
-          sudo apt-get update && sudo apt-get install -y libgsl-dev
+          sudo apt-get update && sudo apt-get install -y libgsl-dev clang libomp-dev
       - name: check.sh
         run: bash tests/check.sh
 
