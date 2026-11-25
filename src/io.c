@@ -65,14 +65,14 @@ potsynth_write(const char * filename, const potsynth_workspace * w)
       const potsynth_radial_workspace * rad = w->radial_workspace_p;
       const uint64_t bom = IO_BOM;
       const uint64_t hu[NHEAD_U] = { w->lmin, w->lmax, w->mmax, w->nfunc, w->nout, w->nrad, w->ncomp,
-                                     (uint64_t) w->w, w->nf1, w->nf2, w->nrows, w->ncols, w->nch, w->nchp,
+                                     (uint64_t) w->w, w->nf1, w->nf2, w->nrows, w->ncols, w->nlay, w->nlayp,
                                      rad->rho, rad->ncheb,
                                      (uint64_t) ((w->omap != NULL) ? IO_FLAG_MAP : 0) |
                                      ((w->nrad > 0 && w->rfn == NULL) ? IO_FLAG_NORADIAL : 0) };
       const int64_t hi[NHEAD_I] = { w->row_lo, w->row_hi, w->col_lo, w->col_hi };
       const double hd[NHEAD_D] = { w->a, w->rmin, w->rmax, w->th_lo, w->th_hi, w->sigma, w->beta, w->half,
                                    w->h1, w->h2, w->inv_h1, w->inv_h2, rad->uc, rad->ud, w->params.eps };
-      const size_t ngrid = w->nrows * w->ncols * w->nchp;
+      const size_t ngrid = w->nrows * w->ncols * w->nlayp;
       FILE * fp = fopen(filename, "wb");
       size_t ok;
 
@@ -201,8 +201,8 @@ potsynth_read(const char * filename, const potsynth_radial * radial, const int n
   w->nf2 = (size_t) hu[9];
   w->nrows = (size_t) hu[10];
   w->ncols = (size_t) hu[11];
-  w->nch = (size_t) hu[12];
-  w->nchp = (size_t) hu[13];
+  w->nlay = (size_t) hu[12];
+  w->nlayp = (size_t) hu[13];
   rad->rho = (size_t) hu[14];
   rad->ncheb = (size_t) hu[15];
 
@@ -243,11 +243,11 @@ potsynth_read(const char * filename, const potsynth_radial * radial, const int n
    * has one layer per function */
   ok = (w->nfunc > 0 && rad->rho > 0 && rad->ncheb > 0 && w->lmin <= w->lmax && w->mmax <= w->lmax &&
         io_mul(rad->rho, rad->ncheb, &nbasis) && io_mul(nbasis, sizeof(double), &nbytes) &&
-        io_mul(w->nrows, w->ncols, &ngrid) && io_mul(ngrid, w->nchp, &ngrid) &&
+        io_mul(w->nrows, w->ncols, &ngrid) && io_mul(ngrid, w->nlayp, &ngrid) &&
         io_mul(ngrid, sizeof(double), &nbytes) &&
-        io_mul(w->nfunc, rad->rho, &nbytes) && w->nch == nbytes &&
+        io_mul(w->nfunc, rad->rho, &nbytes) && w->nlay == nbytes &&
         io_mul(w->nout, w->nfunc, &nbytes) && io_mul(nbytes, sizeof(double), &nbytes) &&
-        w->nchp >= w->nch && w->nchp % POTSYNTH_CHAN_ALIGN == 0 && w->w >= 2 && w->w <= 32 &&
+        w->nlayp >= w->nlay && w->nlayp % POTSYNTH_LAYER_ALIGN == 0 && w->w >= 2 && w->w <= POTSYNTH_WMAX_GIVEN &&
         labs(w->row_lo) < IO_MAXIDX && labs(w->row_hi) < IO_MAXIDX &&
         labs(w->col_lo) < IO_MAXIDX && labs(w->col_hi) < IO_MAXIDX &&
         w->row_lo <= w->row_hi && w->col_lo <= w->col_hi &&

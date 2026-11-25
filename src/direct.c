@@ -58,51 +58,38 @@ potsynth_direct_init(potsynth_workspace * w)
 {
   const size_t L = w->lmax;
   const size_t L1 = L + 1;
-  const size_t nfunc = w->nfunc;
   /* radial functions of the caller: each (functional, radial function) is summed on
      its own, with the coefficient sets of the function, and the functions are
      applied at the points; otherwise one sum per functional */
   const size_t nsetr = potsynth_nsetr(w);
-  size_t m, l, c, k, p, i, total = 0;
+  size_t m, k, q, i, total = 0;
 
-  if (w->C == NULL || w->S == NULL)
-    {
-      /* freed after a fast set-up (setup.c): such a workspace cannot be set up again */
-      POTSYNTH_ERROR ("the coefficients of the model were freed after its fast set-up", POTSYNTH_EINVAL);
-    }
+  if (potsynth_have_coef(w) != POTSYNTH_SUCCESS)
+    return POTSYNTH_EINVAL; /* reported by potsynth_have_coef() */
 
-  /* terms: functional-major, then the parts of the functional, the terms of the operator
-     and the radial functions */
-  w->nterm = 0;
-  for (p = 0; p < w->npart; ++p)
-    w->nterm += potsynth_op_nterm(w->ptheta[p]) * nsetr;
+  /* terms: each operator term of the workspace (functional-major, then part, then term
+     of the operator) for each radial function of the caller */
+  w->dnterm = w->nop * nsetr;
 
   w->doff = malloc(L1 * sizeof(size_t));
-  w->tcol = malloc(w->nterm * sizeof(int));
-  w->tpost = malloc(w->nterm * sizeof(int));
-  w->tfunc = malloc(w->nterm * sizeof(size_t));
+  w->tcol = malloc(w->dnterm * sizeof(int));
+  w->tpost = malloc(w->dnterm * sizeof(int));
+  w->tfunc = malloc(w->dnterm * sizeof(size_t));
   if (w->doff == NULL || w->tcol == NULL || w->tpost == NULL || w->tfunc == NULL)
     {
       POTSYNTH_ERROR ("unable to allocate direct method arrays", POTSYNTH_ENOMEM);
     }
 
   w->needG = 0;
-  for (c = 0, k = 0; c < nfunc; ++c)
+  for (q = 0, k = 0; q < w->nop; ++q)
     {
-      size_t sub;
-
-      for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
+      for (i = 0; i < nsetr; ++i, ++k)
         {
-          for (sub = 0; sub < potsynth_op_nterm(w->ptheta[p]); ++sub)
-            {
-              for (i = 0; i < nsetr; ++i, ++k)
-                {
-                  potsynth_op_term(w->ptheta[p], sub, &(w->tcol[k]), &(w->tpost[k]));
-                  w->tfunc[k] = c * nsetr + i;
-                  if (w->tcol[k] == POTSYNTH_COL_G)
-                    w->needG = 1;
-                }
-            }
+          w->tcol[k] = w->ocol[q];
+          w->tpost[k] = w->opost[q];
+          w->tfunc[k] = w->ofunc[q] * nsetr + i;
+          if (w->tcol[k] == POTSYNTH_COL_G)
+            w->needG = 1;
         }
     }
 
@@ -110,7 +97,7 @@ potsynth_direct_init(potsynth_workspace * w)
     {
       w->doff[m] = total;
       if (m <= w->mmax)
-        total += 2 * w->nterm * (L - m + 1);
+        total += 2 * w->dnterm * (L - m + 1);
     }
 
   w->dW = potsynth_aligned_calloc((total > 0 ? total : 1) * sizeof(double));
@@ -122,40 +109,16 @@ potsynth_direct_init(potsynth_workspace * w)
   for (m = 0; m <= w->mmax; ++m)
     {
       const size_t nn = L - m + 1;
-      const double dm = (double) m;
 
-      for (p = 0, k = 0; p < w->npart; ++p)
+      for (q = 0, k = 0; q < w->nop; ++q)
         {
-          size_t sub;
+          const size_t p = w->opart[q];
 
-          for (sub = 0; sub < potsynth_op_nterm(w->ptheta[p]); ++sub)
+          for (i = 0; i < nsetr; ++i, ++k)
             {
-              for (i = 0; i < nsetr; ++i, ++k)
-                {
-                  const double * C = w->C + potsynth_part_set(w, p, i) * w->nalf;
-                  const double * S = w->S + potsynth_part_set(w, p, i) * w->nalf;
-                  double * wa = w->dW + w->doff[m] + 2 * k * nn;
-                  double * wb = wa + nn;
-                  /* factors per degree in wa, then the coefficients */
-                  const size_t lstart = potsynth_term_factors(w, p, sub, m, NULL, wa);
+              double * wa = w->dW + w->doff[m] + 2 * k * nn;
 
-                  for (l = lstart; l <= L; ++l)
-                    {
-                      const size_t idx = potsynth_alf_idx(l, m, L);
-                      const double f = wa[l - m];
-
-                      if (w->pdphi[p] == 0)
-                        {
-                          wa[l - m] = f * C[idx];
-                          wb[l - m] = f * S[idx];
-                        }
-                      else
-                        {
-                          wa[l - m] = f * dm * S[idx];
-                          wb[l - m] = -f * dm * C[idx];
-                        }
-                    }
-                }
+              potsynth_term_weights(w, p, w->osub[q], potsynth_part_set(w, p, i), m, NULL, wa, wa + nn);
             }
         }
     }
@@ -189,7 +152,7 @@ potsynth_direct_free(potsynth_workspace * w)
 size_t
 potsynth_direct_scratch_size(const potsynth_workspace * w)
 {
-  return (2 * w->nterm + w->nfunc * potsynth_nsetr(w)) * POTSYNTH_NB + w->nrad;
+  return (2 * w->dnterm + w->nfunc * potsynth_nsetr(w)) * POTSYNTH_NB + w->nrad;
 }
 
 #ifdef POTSYNTH_HAVE_VECEXT
@@ -198,8 +161,8 @@ potsynth_direct_scratch_size(const potsynth_workspace * w)
 typedef double potsynth_d4 __attribute__((vector_size(32), aligned(8)));
 
 /*
- * direct_order_NCH(), direct_order_gNCH()
- *   Sums over l for one order m, 4 points and NCH terms, with all
+ * direct_order_NT(), direct_order_gNT()
+ *   Sums over l for one order m, 4 points and NT terms, with all
  * accumulators in vector registers (about 3x faster than the generic version):
  *
  * acc[(2k)*NB + j]   = sum_l WA_k[l-m] u_j^l T_k(l,m)(x_j)
@@ -208,18 +171,18 @@ typedef double potsynth_d4 __attribute__((vector_size(32), aligned(8)));
  * where T_k is the scaled column Q, E or G selected by col[k]. The g variants
  * also run the recursion for G = -dQ/dx; the others never touch it.
  */
-#define POTSYNTH_DIRECT_ORDER(NCH, WITHG, NAME)                                      \
+#define POTSYNTH_DIRECT_ORDER(NT, WITHG, NAME)                                      \
 static void                                                                          \
 NAME(const double * Wm, const size_t nn, const double * ab, const double cl,         \
      const int * col, potsynth_d4 x, potsynth_d4 t, potsynth_d4 u, potsynth_d4 un,   \
      potsynth_d4 q1, potsynth_d4 e1, double * acc)                                   \
 {                                                                                    \
   const potsynth_d4 zero = { 0.0, 0.0, 0.0, 0.0 };                                   \
-  potsynth_d4 A[NCH], B[NCH], q2 = zero, e2 = zero, g1 = zero, g2 = zero;            \
+  potsynth_d4 A[NT], B[NT], q2 = zero, e2 = zero, g1 = zero, g2 = zero;            \
   potsynth_d4 qv, ev, gv = zero, rq, re, rg = zero;                                  \
   size_t k, c;                                                                       \
                                                                                      \
-  for (c = 0; c < NCH; ++c)                                                          \
+  for (c = 0; c < NT; ++c)                                                          \
     A[c] = B[c] = zero;                                                              \
                                                                                      \
   for (k = 0; k < nn; ++k)                                                           \
@@ -255,7 +218,7 @@ NAME(const double * Wm, const size_t nn, const double * ab, const double cl,    
         rg = un * gv;                                                                \
       un *= u;                                                                       \
                                                                                      \
-      for (c = 0; c < NCH; ++c)                                                      \
+      for (c = 0; c < NT; ++c)                                                      \
         {                                                                            \
           const potsynth_d4 v = (col[c] == POTSYNTH_COL_Q) ? rq :                    \
                                 (col[c] == POTSYNTH_COL_E) ? re : rg;                \
@@ -265,7 +228,7 @@ NAME(const double * Wm, const size_t nn, const double * ab, const double cl,    
         }                                                                            \
     }                                                                                \
                                                                                      \
-  for (c = 0; c < NCH; ++c)                                                          \
+  for (c = 0; c < NT; ++c)                                                          \
     {                                                                                \
       *(potsynth_d4 *) (acc + 2 * c * POTSYNTH_NB) = A[c];                           \
       *(potsynth_d4 *) (acc + (2 * c + 1) * POTSYNTH_NB) = B[c];                     \
@@ -331,7 +294,7 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
 {
   const size_t L = w->lmax;
   const size_t nfunc = w->nfunc;
-  const size_t nterm = w->nterm;
+  const size_t nterm = w->dnterm;
   const potsynth_alf_workspace * alf = w->alf_workspace_p;
   double * restrict acc = scratch;                       /* 2*nterm*NB */
   const size_t nsetr = potsynth_nsetr(w);
@@ -576,7 +539,7 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
 
 /*
 direct_order_generic()
-  Sums over l for one order m (as direct_order_NCH()), any number of
+  Sums over l for one order m (as direct_order_NT()), any number of
 terms, accumulators in memory
 
 Inputs: nterm - number of terms

@@ -10,7 +10,7 @@
  *
  * 2) w-by-w weighted sum over the grid of all functionals at once; thanks to the
  *    periodic padding columns each window row is one contiguous block of
- *    w*nchp values
+ *    w*nlayp values
  *
  * 3) radial values b_i(a/r) from their Chebyshev series, and the radial sum
  *
@@ -44,7 +44,7 @@ static void window_origin(const double theta, const double phi, long * l1, long 
                           const potsynth_workspace * w);
 static int validate(const size_t n, const double * r, const double * theta, const double * phi,
                     potsynth_eval_workspace * ew);
-static void window_sum(const double * g0, const size_t rstride, const size_t nchp, const size_t nq,
+static void window_sum(const double * g0, const size_t rstride, const size_t nlayp, const size_t nq,
                        const size_t ww,
                        const double * k1, const double * k2, double * acc);
 static int fast_point(const double r, const double theta, const double phi, const size_t ldo,
@@ -329,11 +329,11 @@ round8(const size_t n)
   return (n + 7) / 8 * 8;
 }
 
-/* fast method per-thread scratch: k1[w], k2[w], acc[nchp], (spare)[nchp], T[ncheb], b[rho] */
+/* fast method per-thread scratch: k1[w], k2[w], acc[nlayp], (spare)[nlayp], T[ncheb], b[rho] */
 static size_t
 fast_scratch_size(const potsynth_workspace * w)
 {
-  return 2 * round8((size_t) w->w) + 2 * round8(w->nchp) +
+  return 2 * round8((size_t) w->w) + 2 * round8(w->nlayp) +
          round8(w->radial_workspace_p->ncheb) + round8(w->radial_workspace_p->rho);
 }
 
@@ -514,11 +514,11 @@ typedef double potsynth_v4 __attribute__((vector_size(32), aligned(8)));
 
 /*
 window_sum()
-  acc[q] = sum_{a,b < w} k1[a] k2[b] g[a*rstride + b*nchp + q], q < nq
+  acc[q] = sum_{a,b < w} k1[a] k2[b] g[a*rstride + b*nlayp + q], q < nq
 
 Inputs: g0      - first grid value of the window (of the first functional summed)
         rstride - grid row stride
-        nchp    - padded number of functionals of a grid node (multiple of 4)
+        nlayp    - padded number of functionals of a grid node (multiple of 4)
         nq      - number of functionals summed (multiple of 4)
         ww      - window width
         k1      - window weights in theta, length ww
@@ -532,7 +532,7 @@ accumulators are in vector registers
 */
 
 static void
-window_sum(const double * restrict g0, const size_t rstride, const size_t nchp, const size_t nq,
+window_sum(const double * restrict g0, const size_t rstride, const size_t nlayp, const size_t nq,
            const size_t ww, const double * restrict k1, const double * restrict k2, double * restrict acc)
 {
   const potsynth_v4 zero = { 0.0, 0.0, 0.0, 0.0 };
@@ -551,7 +551,7 @@ window_sum(const double * restrict g0, const size_t rstride, const size_t nchp, 
           for (b = 0; b < ww; ++b)
             {
               const double wab = k1[a] * k2[b];
-              const double * g = g0 + a * rstride + b * nchp;
+              const double * g = g0 + a * rstride + b * nlayp;
 
               for (q = 0; q < nq; q += 4)
                 *(potsynth_v4 *) (acc + q) += wab * *(const potsynth_v4 *) (g + q);
@@ -574,10 +574,10 @@ window_sum(const double * restrict g0, const size_t rstride, const size_t nchp, 
 
           for (b = 0; b + 4 <= ww; b += 4)
             {
-              const potsynth_v4 * p0 = (const potsynth_v4 *) (g + b * nchp);
-              const potsynth_v4 * p1 = (const potsynth_v4 *) (g + (b + 1) * nchp);
-              const potsynth_v4 * p2 = (const potsynth_v4 *) (g + (b + 2) * nchp);
-              const potsynth_v4 * p3 = (const potsynth_v4 *) (g + (b + 3) * nchp);
+              const potsynth_v4 * p0 = (const potsynth_v4 *) (g + b * nlayp);
+              const potsynth_v4 * p1 = (const potsynth_v4 *) (g + (b + 1) * nlayp);
+              const potsynth_v4 * p2 = (const potsynth_v4 *) (g + (b + 2) * nlayp);
+              const potsynth_v4 * p3 = (const potsynth_v4 *) (g + (b + 3) * nlayp);
               const double w0 = wa * k2[b], w1 = wa * k2[b + 1];
               const double w2 = wa * k2[b + 2], w3 = wa * k2[b + 3];
 
@@ -593,7 +593,7 @@ window_sum(const double * restrict g0, const size_t rstride, const size_t nchp, 
 
           for (; b < ww; ++b)
             {
-              const potsynth_v4 * p0 = (const potsynth_v4 *) (g + b * nchp);
+              const potsynth_v4 * p0 = (const potsynth_v4 *) (g + b * nlayp);
               const double w0 = wa * k2[b];
 
               s0a += w0 * p0[0];
@@ -617,14 +617,14 @@ window_sum(const double * restrict g0, const size_t rstride, const size_t nchp, 
 
           for (b = 0; b + 4 <= ww; b += 4)
             {
-              s0 += (wa * k2[b]) * *(const potsynth_v4 *) (g + b * nchp);
-              s1 += (wa * k2[b + 1]) * *(const potsynth_v4 *) (g + (b + 1) * nchp);
-              s2 += (wa * k2[b + 2]) * *(const potsynth_v4 *) (g + (b + 2) * nchp);
-              s3 += (wa * k2[b + 3]) * *(const potsynth_v4 *) (g + (b + 3) * nchp);
+              s0 += (wa * k2[b]) * *(const potsynth_v4 *) (g + b * nlayp);
+              s1 += (wa * k2[b + 1]) * *(const potsynth_v4 *) (g + (b + 1) * nlayp);
+              s2 += (wa * k2[b + 2]) * *(const potsynth_v4 *) (g + (b + 2) * nlayp);
+              s3 += (wa * k2[b + 3]) * *(const potsynth_v4 *) (g + (b + 3) * nlayp);
             }
 
           for (; b < ww; ++b)
-            s0 += (wa * k2[b]) * *(const potsynth_v4 *) (g + b * nchp);
+            s0 += (wa * k2[b]) * *(const potsynth_v4 *) (g + b * nlayp);
         }
 
       *(potsynth_v4 *) (acc + q) = (s0 + s1) + (s2 + s3);
@@ -635,7 +635,7 @@ window_sum(const double * restrict g0, const size_t rstride, const size_t nchp, 
 
 /* portable version of window_sum() */
 static void
-window_sum(const double * restrict g0, const size_t rstride, const size_t nchp, const size_t nq,
+window_sum(const double * restrict g0, const size_t rstride, const size_t nlayp, const size_t nq,
            const size_t ww, const double * restrict k1, const double * restrict k2, double * restrict acc)
 {
   size_t q, a, b;
@@ -648,7 +648,7 @@ window_sum(const double * restrict g0, const size_t rstride, const size_t nchp, 
       for (b = 0; b < ww; ++b)
         {
           const double wab = k1[a] * k2[b];
-          const double * g = g0 + a * rstride + b * nchp;
+          const double * g = g0 + a * rstride + b * nlayp;
 
           for (q = 0; q < nq; ++q)
             acc[q] += wab * g[q];
@@ -680,14 +680,14 @@ fast_point(const double r, const double theta, const double phi, const size_t ld
 {
   const potsynth_radial_workspace * rad = w->radial_workspace_p;
   const size_t ww = (size_t) w->w;
-  const size_t nchp = w->nchp;
+  const size_t nlayp = w->nlayp;
   const size_t rho = rad->rho;
   const size_t ncheb = rad->ncheb;
   const double ihalf = 1.0 / w->half;
   double * k1 = scratch;
   double * k2 = k1 + round8(ww);
   double * acc = k2 + round8(ww);
-  double * T = acc + 2 * round8(nchp);
+  double * T = acc + 2 * round8(nlayp);
   double * b = T + round8(ncheb);
   double ph, zt, zp, t;
   long l1, l2;
@@ -732,8 +732,8 @@ fast_point(const double r, const double theta, const double phi, const size_t ld
       start = (first * nfunc) & ~((size_t) 3);
       end = ((first + cnt) * nfunc + 3) & ~((size_t) 3);
 
-      window_sum(w->grid + ((size_t) (l1 - w->row_lo) * w->ncols + (size_t) (l2 - w->col_lo)) * nchp + start,
-                 w->ncols * nchp, nchp, end - start, ww, k1, k2, acc);
+      window_sum(w->grid + ((size_t) (l1 - w->row_lo) * w->ncols + (size_t) (l2 - w->col_lo)) * nlayp + start,
+                 w->ncols * nlayp, nlayp, end - start, ww, k1, k2, acc);
 
       for (c = 0; c < nfunc; ++c)
         {
@@ -749,8 +749,8 @@ fast_point(const double r, const double theta, const double phi, const size_t ld
     }
 
   /* w-by-w window sum, all functionals */
-  window_sum(w->grid + ((size_t) (l1 - w->row_lo) * w->ncols + (size_t) (l2 - w->col_lo)) * nchp,
-             w->ncols * nchp, nchp, nchp, ww, k1, k2, acc);
+  window_sum(w->grid + ((size_t) (l1 - w->row_lo) * w->ncols + (size_t) (l2 - w->col_lo)) * nlayp,
+             w->ncols * nlayp, nlayp, nlayp, ww, k1, k2, acc);
 
   /* radial values b_i(t) */
   if (rad->ud > 0.0)

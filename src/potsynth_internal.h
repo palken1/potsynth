@@ -36,7 +36,7 @@
 #endif
 
 #define POTSYNTH_NB                  8      /* nodes/points per vectorized block (one cache line of doubles) */
-#define POTSYNTH_CHAN_ALIGN          4      /* grid functional dimension padded to a multiple of this */
+#define POTSYNTH_LAYER_ALIGN          4      /* grid functional dimension padded to a multiple of this */
 #define POTSYNTH_ALIGN               64     /* memory alignment in bytes */
 #define POTSYNTH_ALF_EXPMAX          960    /* scaled ALF columns stay below 2^EXPMAX */
 #define POTSYNTH_ALF_SCALEMAX        1000   /* largest power-of-2 column scaling (bounds the degree) */
@@ -48,6 +48,7 @@
 #define POTSYNTH_THETA_TOL           1.0e-6
 
 #define POTSYNTH_WMAX                16     /* largest window width in the calibration tables */
+#define POTSYNTH_WMAX_GIVEN          32     /* largest window width the caller may give */
 #define POTSYNTH_AUTO_LMIN           24     /* METHOD_AUTO uses the fast method for lmax >= this */
 
 /* report an error through the error handler and return */
@@ -122,6 +123,16 @@ struct potsynth_workspace
   int * pdphi;          /* phi derivatives of each part, length npart */
   double * prfac;       /* per-degree factors of each part (with its constant factor),
                            prfac[p*(lmax+1) + l] */
+  /* operator terms (potsynth_op_nterm() per part), functional-major, then part, then
+   * term: one table for both methods, which expand each term over radial functions
+   * (fast) or coefficient sets of radial functions of the caller (direct) */
+  size_t nop;           /* number of operator terms */
+  size_t * obase;       /* first operator term of each functional, length nfunc+1 */
+  size_t * ofunc;       /* functional of each operator term, length nop */
+  size_t * opart;       /* part of each operator term */
+  size_t * osub;        /* term number within the operator of its part */
+  int * ocol;           /* Legendre column of each operator term (POTSYNTH_COL_xxx) */
+  int * opost;          /* factor after the sum (POTSYNTH_POST_xxx) */
 
   /* outputs: linear combinations of the functionals at each point (front-ends) */
   size_t nout;          /* outputs per point (= nfunc without a map) */
@@ -160,17 +171,17 @@ struct potsynth_workspace
   long col_hi;          /* last stored grid column */
   size_t nrows;         /* number of stored rows */
   size_t ncols;         /* number of stored columns */
-  size_t nch;           /* number of grid functionals, nfunc * rho */
-  size_t nchp;          /* nch padded to POTSYNTH_CHAN_ALIGN */
-  double * grid;        /* grid[((row - row_lo)*ncols + (col - col_lo))*nchp + q] */
+  size_t nlay;           /* number of grid functionals, nfunc * rho */
+  size_t nlayp;          /* nlay padded to POTSYNTH_LAYER_ALIGN */
+  double * grid;        /* grid[((row - row_lo)*ncols + (col - col_lo))*nlayp + q] */
   potsynth_radial_workspace * radial_workspace_p;
 
   /* direct method: each functional is a sum of terms, each the sum over l of one
    * scaled column (Q, E or G) with a weight row, times a power of sin(theta) */
-  size_t nterm;         /* number of terms */
-  int * tcol;           /* column of each term (POTSYNTH_COL_xxx), length nterm */
-  int * tpost;          /* factor applied after the sum (POTSYNTH_POST_xxx), length nterm */
-  size_t * tfunc;       /* functional of each term, length nterm */
+  size_t dnterm;        /* number of terms of the direct method (operator terms x sets of a radial function) */
+  int * tcol;           /* column of each term (POTSYNTH_COL_xxx), length dnterm */
+  int * tpost;          /* factor applied after the sum (POTSYNTH_POST_xxx), length dnterm */
+  size_t * tfunc;       /* functional of each term, length dnterm */
   int needG;            /* 1 if any term uses column G */
   double * dW;          /* weight rows (A, B per term) of order m at dW + doff[m],
                            rows of length lmax-m+1 */
@@ -305,6 +316,17 @@ potsynth_workspace * potsynth_alloc_setp(const size_t lmin, const size_t lmax, c
                                          const potsynth_radial * radial,
                                          const size_t nout, const potsynth_output * out,
                                          const potsynth_parameters * params);
+int potsynth_op_table(potsynth_workspace * w);
+int potsynth_have_coef(const potsynth_workspace * w);
+
+/* shape parameter of the window of width w for oversampling sigma */
+static inline double
+potsynth_window_beta(const int w, const double sigma)
+{
+  return M_PI * (1.0 - 1.0 / (2.0 * sigma)) * w;
+}
+size_t potsynth_term_weights(const potsynth_workspace * w, const size_t p, const size_t sub, const size_t set,
+                             const size_t m, const double * beta, double * wa, double * wb);
 size_t potsynth_term_factors(const potsynth_workspace * w, const size_t p, const size_t sub,
                              const size_t m, const double * beta, double * f);
 int potsynth_radial_eval(const potsynth_workspace * w, const double r, size_t * first, size_t * n, double * f);

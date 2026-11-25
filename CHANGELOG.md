@@ -95,6 +95,11 @@ First public release.
   sphere; the model file records this); pkg-config names libc++ only for Apple's clang.
 - The radial step computes each power u^(l+p) once per degree instead of once per radial
   function, and copies the coefficients of functionals with the same radial power.
+- Internal cleanup: one table of operator terms built at allocation and used by both
+  methods (it was built three times); one routine for the weight rows of a term (it was
+  written in both methods); shared helpers for repeated checks and formulas; "layer"
+  for one functional and radial function of the grid throughout (was channel/pair);
+  debugging output removed.
 - Set-up skips the theta-derivative column of the Legendre recursion when no functional
   uses it (potentials and radial components alone).
 - Robustness: functions that need the coefficients of a model refuse a fast workspace,

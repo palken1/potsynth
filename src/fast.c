@@ -40,21 +40,21 @@
 #include "potsynth_internal.h"
 #include "potsynth_fft.h"
 
-#define FAST_TBLK 8 /* pairs transformed together in the theta pass (fast_order()) */
+#define FAST_TBLK 8 /* layers transformed together in the theta pass (fast_order()) */
 
 /* per-thread buffers */
 typedef struct
 {
   double * W;           /* weights, 2*nterm rows of length lmax+1 */
-  size_t * n0;          /* first index (l - m) of each term pair, length nterm */
-  unsigned char * src;  /* column of each term pair (POTSYNTH_COL_xxx), length nterm */
+  size_t * n0;          /* first index (l - m) of each term, length nterm */
+  unsigned char * src;  /* column of each term (POTSYNTH_COL_xxx), length nterm */
   double * Q;           /* column values, (lmax+1)*POTSYNTH_NB */
   double * E;           /* column values, (lmax+1)*POTSYNTH_NB */
   double * G;           /* column values, (lmax+1)*POTSYNTH_NB, or NULL */
   double * acc;         /* sums of one node block, 4*nterm*POTSYNTH_NB */
   double * S;           /* quadrant sums, 4*nterm*nqp */
-  double * H;           /* doubled-sphere functions of a group of pairs, FAST_TBLK*Nt complex */
-  double * Z;           /* fine theta grid of each pair, npair*nf1 complex */
+  double * H;           /* doubled-sphere functions of a group of layers, FAST_TBLK*Nt complex */
+  double * Z;           /* fine theta grid of each layer, nlay*nf1 complex */
   double * pm;          /* s_j^(m-d) of the order being computed, d = 0, 1, 2: mantissa, 3*nqp */
   double * p2;          /* and its power of two (with the column scaling), or 0 if not a double */
   int * pe;             /* and its exponent (with the column scaling), 3*nqp */
@@ -71,13 +71,9 @@ typedef struct
   double * c1;          /* pre-sharpening factors in theta, length lmax+1 */
   double * c2;          /* pre-sharpening factors in phi, length lmax+1 */
   double * shift;       /* e^{-i p pi/Nt}/Nt, p = -lmax..lmax (complex) */
-  size_t nterm;         /* term pairs: (functional c, term t, radial function i) */
-  size_t * tbase;       /* first term pair of functional c is tbase[c] + i; term t at + t*rho */
-  int * tcol;           /* column of each term pair (POTSYNTH_COL_xxx) */
-  int * tpost;          /* factor after the sum (POTSYNTH_POST_xxx) */
-  size_t * tsub;        /* term number within the functional */
-  size_t * tfunc;       /* functional of each term pair */
-  size_t * tpart;       /* part (operator and coefficient set) of each term pair */
+  size_t nterm;         /* terms: (functional c, term t, radial function i) */
+  /* term k = q*rho + i: operator term q of the workspace (w->ocol, ...), radial
+     function i */
   int needG;            /* 1 if any term uses column G */
   int needE;            /* 1 if any term uses column E (none for potentials and radial derivatives) */
   int nthreads;         /* number of threads */
@@ -88,12 +84,21 @@ static int fast_state_alloc(potsynth_workspace * w, fast_state_t * state);
 static void fast_state_free(fast_state_t * state);
 static int fast_order(const size_t m, const fast_state_t * state, fast_thread * thread,
                       potsynth_workspace * w);
-static int fast_row(const size_t row, const fast_state_t * state, potsynth_workspace * w);
+static int fast_row(const size_t row, potsynth_workspace * w);
 static int func_same_sets(const potsynth_workspace * w, const size_t c, const size_t c2);
 static size_t check_select(const potsynth_workspace * w, const size_t * grp, const size_t ngrp, size_t * sel);
 static int check_direct(const potsynth_workspace * w, const size_t nsel, const size_t * sel, const size_t n,
                         const double * r, const double * th, const double * ph, double * out);
 static long floor_mod(const long a, const long n);
+
+/* fine grid size: >= sigma (2 lmax + 1) and >= 2 w, even and 2,3,5-smooth */
+static size_t
+fast_nf(const size_t lmax, const double sigma, const int w)
+{
+  const size_t nmin = (size_t) ceil(sigma * (2 * lmax + 1));
+
+  return potsynth_next_smooth((nmin > 2 * (size_t) w) ? nmin : 2 * (size_t) w, 2);
+}
 
 /*
 potsynth_fast_init()
@@ -109,28 +114,24 @@ potsynth_fast_init(potsynth_workspace * w)
 {
   const size_t L = w->lmax;
   const size_t L1 = L + 1;
-  const size_t nband = 2 * L + 1;
   fast_state_t state;
   double * wn;
   double tol;
   long mm, rr;
   int status = POTSYNTH_SUCCESS;
 
-  if (w->C == NULL || w->S == NULL)
-    {
-      /* freed after a fast set-up (setup.c): such a workspace cannot be set up again */
-      POTSYNTH_ERROR ("the coefficients of the model were freed after its fast set-up", POTSYNTH_EINVAL);
-    }
+  if (potsynth_have_coef(w) != POTSYNTH_SUCCESS)
+    return POTSYNTH_EINVAL; /* reported by potsynth_have_coef() */
 
   /* window */
   w->sigma = (w->params.sigma > 0.0) ? w->params.sigma : 2.0;
   w->w = (w->params.w > 0) ? w->params.w : potsynth_window_choose(w->params.eps, w->sigma);
-  if (w->w < 2 || w->w > 32)
+  if (w->w < 2 || w->w > POTSYNTH_WMAX_GIVEN)
     {
-      POTSYNTH_ERROR ("window width must be between 2 and 32", POTSYNTH_EINVAL);
+      POTSYNTH_ERROR ("window width given must be between 2 and 32", POTSYNTH_EINVAL);
     }
 
-  w->beta = M_PI * (1.0 - 1.0 / (2.0 * w->sigma)) * w->w;
+  w->beta = potsynth_window_beta(w->w, w->sigma);
   w->half = 0.5 * w->w;
 
   /* step 1: radial basis */
@@ -154,14 +155,13 @@ potsynth_fast_init(potsynth_workspace * w)
      (potsynth_window_choose_shell) */
   if (w->params.w <= 0)
     {
-      const size_t nmin = (size_t) ceil(w->sigma * nband);
-      const size_t nf = potsynth_next_smooth((nmin > 2 * (size_t) w->w) ? nmin : 2 * (size_t) w->w, 2);
+      const size_t nf = fast_nf(L, w->sigma, w->w);
 
       /* radial functions of the caller: no powers of a/r (u = 1) */
       w->w = potsynth_window_choose_shell(w->params.eps, w->sigma, L, nf, w->lmin, w->nfunc, w->rpow,
                                           wn, (w->nrad > 0) ? 1.0 : w->a / w->rmax,
                                           (w->nrad > 0) ? 1.0 : w->a / w->rmin);
-      w->beta = M_PI * (1.0 - 1.0 / (2.0 * w->sigma)) * w->w;
+      w->beta = potsynth_window_beta(w->w, w->sigma);
       w->half = 0.5 * w->w;
     }
 
@@ -180,10 +180,7 @@ potsynth_fast_init(potsynth_workspace * w)
     return POTSYNTH_EINVAL; /* reported by potsynth_radial_alloc() */
 
   /* grid geometry: nf >= sigma (2 lmax + 1) and >= 2 w, even and 2,3,5-smooth */
-  {
-    const size_t nmin = (size_t) ceil(w->sigma * nband);
-    w->nf1 = potsynth_next_smooth((nmin > 2 * (size_t) w->w) ? nmin : 2 * (size_t) w->w, 2);
-  }
+  w->nf1 = fast_nf(L, w->sigma, w->w);
   w->nf2 = w->nf1;
   w->h1 = 2.0 * M_PI / w->nf1;
   w->h2 = 2.0 * M_PI / w->nf2;
@@ -201,10 +198,10 @@ potsynth_fast_init(potsynth_workspace * w)
 
   w->nrows = (size_t) (w->row_hi - w->row_lo + 1);
   w->ncols = (size_t) (w->col_hi - w->col_lo + 1);
-  w->nch = w->nfunc * w->radial_workspace_p->rho;
-  w->nchp = (w->nch + POTSYNTH_CHAN_ALIGN - 1) / POTSYNTH_CHAN_ALIGN * POTSYNTH_CHAN_ALIGN;
+  w->nlay = w->nfunc * w->radial_workspace_p->rho;
+  w->nlayp = (w->nlay + POTSYNTH_LAYER_ALIGN - 1) / POTSYNTH_LAYER_ALIGN * POTSYNTH_LAYER_ALIGN;
 
-  if ((double) w->nrows * w->ncols * w->nchp * sizeof(double) > (double) SIZE_MAX / 2)
+  if ((double) w->nrows * w->ncols * w->nlayp * sizeof(double) > (double) SIZE_MAX / 2)
     {
       POTSYNTH_ERROR ("grid too large", POTSYNTH_ENOMEM);
     }
@@ -212,7 +209,7 @@ potsynth_fast_init(potsynth_workspace * w)
   /* not zeroed here (a serial pass over the whole grid): the orders write the Fourier
    * slots 0..2 mmax of every row and functional, and fast_row() supplies the zeros of the
    * slots above them and of the padding functionals */
-  w->grid = potsynth_aligned_alloc(w->nrows * w->ncols * w->nchp * sizeof(double));
+  w->grid = potsynth_aligned_alloc(w->nrows * w->ncols * w->nlayp * sizeof(double));
   if (w->grid == NULL)
     {
       POTSYNTH_ERROR ("unable to allocate grid", POTSYNTH_ENOMEM);
@@ -249,7 +246,7 @@ potsynth_fast_init(potsynth_workspace * w)
 #pragma omp parallel for private(rr) schedule(static) num_threads(state.nthreads)
       for (rr = 0; rr < (long) w->nrows; ++rr)
         {
-          int s = fast_row((size_t) rr, &state, w);
+          int s = fast_row((size_t) rr, w);
 
           if (s)
             {
@@ -293,58 +290,16 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
 
   memset(state, 0, sizeof(fast_state_t));
 
-  /* term pairs, functional-major, then term, then radial function */
-  state->tbase = malloc(w->nfunc * sizeof(size_t));
-  if (state->tbase == NULL)
-    {
-      POTSYNTH_ERROR ("unable to allocate set-up data", POTSYNTH_ENOMEM);
-    }
-
-  /* the terms of a functional are those of its parts, one after the other */
-  state->nterm = 0;
-  for (j = 0; j < w->nfunc; ++j)
-    {
-      size_t p;
-
-      state->tbase[j] = state->nterm;
-      for (p = w->pbase[j]; p < w->pbase[j + 1]; ++p)
-        state->nterm += potsynth_op_nterm(w->ptheta[p]) * w->radial_workspace_p->rho;
-    }
-
-  state->tcol = malloc(state->nterm * sizeof(int));
-  state->tpost = malloc(state->nterm * sizeof(int));
-  state->tsub = malloc(state->nterm * sizeof(size_t));
-  state->tfunc = malloc(state->nterm * sizeof(size_t));
-  state->tpart = malloc(state->nterm * sizeof(size_t));
-  if (!state->tcol || !state->tpost || !state->tsub || !state->tfunc || !state->tpart)
-    {
-      POTSYNTH_ERROR ("unable to allocate set-up data", POTSYNTH_ENOMEM);
-    }
-
+  /* terms: each operator term of the workspace for each radial function */
+  state->nterm = w->nop * w->radial_workspace_p->rho;
   state->needG = 0;
   state->needE = 0;
-  for (j = 0; j < w->nfunc; ++j)
+  for (j = 0; j < w->nop; ++j)
     {
-      const size_t rho = w->radial_workspace_p->rho;
-      size_t p, t, t0 = 0, i2;
-
-      for (p = w->pbase[j]; p < w->pbase[j + 1]; t0 += potsynth_op_nterm(w->ptheta[p]), ++p)
-      for (t = 0; t < potsynth_op_nterm(w->ptheta[p]); ++t)
-        {
-          for (i2 = 0; i2 < rho; ++i2)
-            {
-              const size_t kt = state->tbase[j] + (t0 + t) * rho + i2;
-
-              potsynth_op_term(w->ptheta[p], t, &(state->tcol[kt]), &(state->tpost[kt]));
-              state->tsub[kt] = t;
-              state->tfunc[kt] = j;
-              state->tpart[kt] = p;
-              if (state->tcol[kt] == POTSYNTH_COL_G)
-                state->needG = 1;
-              if (state->tcol[kt] == POTSYNTH_COL_E)
-                state->needE = 1;
-            }
-        }
+      if (w->ocol[j] == POTSYNTH_COL_G)
+        state->needG = 1;
+      if (w->ocol[j] == POTSYNTH_COL_E)
+        state->needE = 1;
     }
 
   state->Nt = potsynth_next_smooth(2 * L + 2, 4);
@@ -409,7 +364,7 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
       thread->acc = potsynth_aligned_alloc(4 * state->nterm * POTSYNTH_NB * sizeof(double));
       thread->S = potsynth_aligned_alloc(4 * state->nterm * state->nqp * sizeof(double));
       thread->H = potsynth_aligned_alloc(2 * FAST_TBLK * state->Nt * sizeof(double));
-      thread->Z = potsynth_aligned_alloc(2 * w->nch * w->nf1 * sizeof(double));
+      thread->Z = potsynth_aligned_alloc(2 * w->nlay * w->nf1 * sizeof(double));
       thread->pm = malloc(3 * state->nqp * sizeof(double));
       thread->p2 = malloc(3 * state->nqp * sizeof(double));
       thread->pe = malloc(3 * state->nqp * sizeof(int));
@@ -441,24 +396,6 @@ fast_state_free(fast_state_t * state)
 
   if (state->shift)
     free(state->shift);
-
-  if (state->tbase)
-    free(state->tbase);
-
-  if (state->tcol)
-    free(state->tcol);
-
-  if (state->tpost)
-    free(state->tpost);
-
-  if (state->tsub)
-    free(state->tsub);
-
-  if (state->tfunc)
-    free(state->tfunc);
-
-  if (state->tpart)
-    free(state->tpart);
 
   if (state->threads)
     {
@@ -520,7 +457,7 @@ Inputs: m      - SH order
 Notes:
 1) Pair k = (c, i) of functional c and radial function i has weight rows
 A (cos m phi) and B (sin m phi); the angular function is
-G = Re[ (S_A - i S_B) e^{i m phi} ]. Each pair is the sum of its terms (one
+G = Re[ (S_A - i S_B) e^{i m phi} ]. Each layer is the sum of its terms (one
 for P, P/sin, dP/dtheta; three for S2A, two for S2B), each accumulated
 separately and multiplied by its power of sin(theta) (and x) at the node
 
@@ -547,52 +484,27 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
   const size_t L1 = L + 1;
   const size_t nn = L - m + 1;
   const size_t rho = w->radial_workspace_p->rho;
-  const size_t npair = w->nch;
+  const size_t nlay = w->nlay;
   const size_t Nt = state->Nt;
   const size_t nqp = state->nqp;
   const size_t nf1 = w->nf1;
   const int scale = w->alf_workspace_p->scale[m];
-  const double dm = (double) m;
-  size_t k, k0, b, j, l;
+  size_t k, k0, b, j;
   long r;
 
-  /* weight rows of each term pair */
+  /* weight rows of each term */
   for (k = 0; k < state->nterm; ++k)
     {
-      const size_t c = state->tfunc[k];
-      const size_t i = (k - state->tbase[c]) % rho;
-      const size_t p = state->tpart[k];
+      const size_t q = k / rho, i = k % rho; /* operator term, radial function */
+      const size_t c = w->ofunc[q];
+      const size_t p = w->opart[q];
       const double * beta = w->radial_workspace_p->beta + (c * rho + i) * L1;
-      const double * C = w->C + potsynth_part_set(w, p, i) * w->nalf;
-      const double * S = w->S + potsynth_part_set(w, p, i) * w->nalf;
       double * wa = thread->W + 2 * k * L1;
-      double * wb = wa + L1;
-      /* factors per degree in wa, then the coefficients */
-      const size_t lstart = potsynth_term_factors(w, p, state->tsub[k], m, beta, wa);
+      const size_t lstart = potsynth_term_weights(w, p, w->osub[q], potsynth_part_set(w, p, i), m, beta,
+                                                  wa, wa + L1);
 
-      thread->src[k] = (unsigned char) state->tcol[k];
+      thread->src[k] = (unsigned char) w->ocol[q];
       thread->n0[k] = lstart - m;
-
-      for (l = m; l <= L; ++l)
-        {
-          const size_t idx = potsynth_alf_idx(l, m, L);
-          const double f = wa[l - m];
-          double A, B;
-
-          if (w->pdphi[p] == 0)
-            {
-              A = C[idx];
-              B = S[idx];
-            }
-          else
-            {
-              A = dm * S[idx];
-              B = -dm * C[idx];
-            }
-
-          wa[l - m] = f * A;
-          wb[l - m] = f * B;
-        }
     }
 
   /* recursion + accumulation over node blocks of the first quadrant */
@@ -636,12 +548,12 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
         }
     }
 
-  /* the pairs in groups of FAST_TBLK: combine terms and build the doubled-sphere
-   * functions, forward FFTs of the group in one call (vectorized across its pairs),
+  /* the layers in groups of FAST_TBLK: combine terms and build the doubled-sphere
+   * functions, forward FFTs of the group in one call (vectorized across its layers),
    * pre-sharpen, backward FFTs; a group's functions stay in cache */
-  for (k0 = 0; k0 < npair; k0 += FAST_TBLK)
+  for (k0 = 0; k0 < nlay; k0 += FAST_TBLK)
     {
-      const size_t k1 = (k0 + FAST_TBLK < npair) ? k0 + FAST_TBLK : npair;
+      const size_t k1 = (k0 + FAST_TBLK < nlay) ? k0 + FAST_TBLK : nlay;
 
       for (k = k0; k < k1; ++k)
         {
@@ -669,8 +581,9 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
 
               for (t = 0; t < nt; ++t)
                 {
-                  const size_t kt = state->tbase[c] + (t0 + t) * rho + i;
-                  const int post = state->tpost[kt];
+                  const size_t qt = w->obase[c] + t0 + t; /* operator term */
+                  const size_t kt = qt * rho + i;
+                  const int post = w->opost[qt];
                   const double * S = thread->S + 4 * kt * nqp;
                   const int xf = (post == POTSYNTH_POST_XSM || post == POTSYNTH_POST_XSM2);
                   double f = xf ? state->xq[j] : 1.0;
@@ -749,7 +662,7 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
       if (potsynth_fft_c2c(Nt, k1 - k0, Nt, 1, thread->H, 1.0) != 0)
         return POTSYNTH_ENOMEM;
 
-      /* pre-sharpen each pair of the group onto the fine theta grid */
+      /* pre-sharpen each layer of the group onto the fine theta grid */
       {
         const double pfac = (m == 0) ? 1.0 : 0.5;
 
@@ -782,21 +695,21 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
   for (r = w->row_lo; r <= w->row_hi; ++r)
     {
       const size_t lrow = (size_t) floor_mod(r, (long) nf1);
-      double * row = w->grid + (size_t) (r - w->row_lo) * w->ncols * w->nchp;
+      double * row = w->grid + (size_t) (r - w->row_lo) * w->ncols * w->nlayp;
 
       if (m == 0)
         {
-          double * g = row + (size_t) (0 - w->col_lo) * w->nchp;
+          double * g = row + (size_t) (0 - w->col_lo) * w->nlayp;
 
-          for (k = 0; k < npair; ++k)
+          for (k = 0; k < nlay; ++k)
             g[potsynth_layer(w, k / rho, k % rho, rho)] = thread->Z[2 * k * nf1 + 2 * lrow];
         }
       else
         {
-          double * gr = row + (size_t) ((long) (2 * m - 1) - w->col_lo) * w->nchp;
-          double * gi = gr + w->nchp;
+          double * gr = row + (size_t) ((long) (2 * m - 1) - w->col_lo) * w->nlayp;
+          double * gi = gr + w->nlayp;
 
-          for (k = 0; k < npair; ++k)
+          for (k = 0; k < nlay; ++k)
             {
               const size_t q = potsynth_layer(w, k / rho, k % rho, rho);
 
@@ -816,49 +729,46 @@ periodic padding columns
 
 Notes:
 1) The grid is not zeroed at allocation: the Fourier slots above 2 mmax, which no
-order writes, are set to zero here, and so are the padding functionals nch..nchp-1
+order writes, are set to zero here, and so are the padding functionals nlay..nlayp-1
 2) The row is transformed in place, all its functionals in one call: element k of
-functional q is at column k, q (stride nchp between columns), and the transforms
+functional q is at column k, q (stride nlayp between columns), and the transforms
 are vectorized across the functionals, which are next to each other
 
 Inputs: row   - stored row index
-        state - shared set-up data
         w     - workspace
 */
 
 static int
-fast_row(const size_t row, const fast_state_t * state, potsynth_workspace * w)
+fast_row(const size_t row, potsynth_workspace * w)
 {
   const size_t nf2 = w->nf2;
-  const size_t nchp = w->nchp;
-  const size_t nch = w->nch;
+  const size_t nlayp = w->nlayp;
+  const size_t nlay = w->nlay;
   const size_t kmax = 2 * w->mmax; /* last Fourier slot written by the orders */
-  double * g = w->grid + row * w->ncols * nchp;
-  double * g0 = g + (size_t) (0 - w->col_lo) * nchp; /* column 0 */
+  double * g = w->grid + row * w->ncols * nlayp;
+  double * g0 = g + (size_t) (0 - w->col_lo) * nlayp; /* column 0 */
   size_t k;
   long col;
 
-  (void) state;
-
   for (k = kmax + 1; k < nf2; ++k)
-    memset(g0 + k * nchp, 0, nch * sizeof(double));
+    memset(g0 + k * nlayp, 0, nlay * sizeof(double));
 
-  if (potsynth_fft_r_backward(nf2, nch, (ptrdiff_t) nchp, 1, g0, 1.0) != 0)
+  if (potsynth_fft_r_backward(nf2, nlay, (ptrdiff_t) nlayp, 1, g0, 1.0) != 0)
     return POTSYNTH_ENOMEM;
 
   /* periodic padding columns */
   for (col = w->col_lo; col <= w->col_hi; ++col)
     {
       if (col < 0 || col >= (long) nf2)
-        memcpy(g + (size_t) (col - w->col_lo) * nchp, g0 + (size_t) floor_mod(col, (long) nf2) * nchp,
-               nch * sizeof(double));
+        memcpy(g + (size_t) (col - w->col_lo) * nlayp, g0 + (size_t) floor_mod(col, (long) nf2) * nlayp,
+               nlay * sizeof(double));
     }
 
   /* padding functionals */
-  if (nchp > nch)
+  if (nlayp > nlay)
     {
       for (k = 0; k < w->ncols; ++k)
-        memset(g + k * nchp + nch, 0, (nchp - nch) * sizeof(double));
+        memset(g + k * nlayp + nlay, 0, (nlayp - nlay) * sizeof(double));
     }
 
   return POTSYNTH_SUCCESS;
@@ -981,13 +891,12 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
       POTSYNTH_ERROR ("unable to allocate components", POTSYNTH_ENOMEM);
     }
 
-  if (w->C == NULL || w->S == NULL)
+  if (potsynth_have_coef(w) != POTSYNTH_SUCCESS)
     {
-      /* freed after a fast set-up (setup.c) */
       free(grp);
       free(plist);
       free(pfunc);
-      POTSYNTH_ERROR ("the coefficients of the model were freed after its fast set-up", POTSYNTH_EINVAL);
+      return POTSYNTH_EINVAL; /* reported by potsynth_have_coef() */
     }
 
   for (c = 0; c < nfunc; ++c)
@@ -1399,7 +1308,7 @@ Return: 1 on success, 0 on failure
 */
 
 static int
-check_many(potsynth_workspace * w, const size_t * grp, const size_t nsel, const size_t * sel,
+check_many(potsynth_workspace * w, const size_t nsel, const size_t * sel,
            const size_t * cg, const size_t ncg, const size_t npt, const double * r, const double * th,
            const double * ph, const long * pown, const double * of, double * worst, int * failed)
 {
@@ -1413,7 +1322,6 @@ check_many(potsynth_workspace * w, const size_t * grp, const size_t nsel, const 
   int ok = (idx && fs && fk && rr && tt && pp && od);
   size_t kg;
 
-  (void) grp;
   if (!ok)
     *failed = POTSYNTH_ENOMEM;
 
@@ -1482,7 +1390,7 @@ check_many(potsynth_workspace * w, const size_t * grp, const size_t nsel, const 
 double
 potsynth_fast_check(potsynth_workspace * w)
 {
-  const size_t nfunc = w->nfunc, rho = w->radial_workspace_p->rho, nchp = w->nchp;
+  const size_t nfunc = w->nfunc, rho = w->radial_workspace_p->rho, nlayp = w->nlayp;
   const size_t nc = w->radial_workspace_p->ncheb;
   /* grid rows inside the colatitude range of the points, without the poles */
   const long rpole = (long) floor(M_PI * w->inv_h1);
@@ -1525,26 +1433,22 @@ potsynth_fast_check(potsynth_workspace * w)
       nlist = nsel;
       if (ok && many)
         {
+          /* the checked components numbered 0..ncg-1 in the order they first appear */
+          size_t * gnum = malloc(ngrp * sizeof(size_t));
+
           cg = malloc(nsel * sizeof(size_t));
-          ok = (cg != NULL);
+          ok = (cg != NULL && gnum != NULL);
           if (!ok)
             failed = POTSYNTH_ENOMEM;
+          for (c = 0; ok && c < ngrp; ++c)
+            gnum[c] = ngrp; /* not seen */
           for (c = 0; ok && c < nsel; ++c)
             {
-              size_t c2;
-
-              cg[c] = ncg;
-              for (c2 = 0; c2 < c; ++c2)
-                {
-                  if (grp[sel[c2]] == grp[sel[c]])
-                    {
-                      cg[c] = cg[c2];
-                      break;
-                    }
-                }
-              if (cg[c] == ncg)
-                ++ncg;
+              if (gnum[grp[sel[c]]] == ngrp)
+                gnum[grp[sel[c]]] = ncg++;
+              cg[c] = gnum[grp[sel[c]]];
             }
+          free(gnum);
           nlist = ncg;
         }
       ntop = nlist * ctop;
@@ -1563,10 +1467,10 @@ potsynth_fast_check(potsynth_workspace * w)
       th = malloc(npt * sizeof(double));
       ph = malloc(npt * sizeof(double));
       of = malloc(nsel * npt * sizeof(double));
-      od = malloc(nsel * npt * sizeof(double));
+      od = many ? NULL : malloc(nsel * npt * sizeof(double)); /* many: per component (check_many()) */
       buf = malloc(nfunc * CHECK_CHUNK * sizeof(double));
       acc = calloc(4 * ngrp, sizeof(double));
-      ok = (tops && tmin && (!many || lsqall) && pown && topr && topc && r && th && ph && of && od && buf && acc);
+      ok = (tops && tmin && (!many || lsqall) && pown && topr && topc && r && th && ph && of && (many || od) && buf && acc);
       if (!ok)
         failed = POTSYNTH_ENOMEM;
     }
@@ -1614,7 +1518,7 @@ potsynth_fast_check(potsynth_workspace * w)
                     for (col = -1; col <= (long) w->nf2; ++col)
                       {
                         const double * g = w->grid + ((size_t) (rr - w->row_lo) * w->ncols +
-                                                      (size_t) (col - w->col_lo)) * nchp;
+                                                      (size_t) (col - w->col_lo)) * nlayp;
 
                         for (ck = 0; ck < nsel; ++ck)
                           {
@@ -1653,7 +1557,7 @@ potsynth_fast_check(potsynth_workspace * w)
                         else
                           {
                             const double * g = w->grid + ((size_t) (rq - w->row_lo) * w->ncols +
-                                                          (size_t) (cq - w->col_lo)) * nchp;
+                                                          (size_t) (cq - w->col_lo)) * nlayp;
                             double sum = 0.0;
                             for (ii = 0; ii < rho; ++ii)
                               sum += b1[ii] * g[potsynth_layer(w, cc, ii, rho)];
@@ -1798,7 +1702,7 @@ potsynth_fast_check(potsynth_workspace * w)
    * its own candidate points and the random points */
   if (ok && many)
     {
-      ok = check_many(w, grp, nsel, sel, cg, ncg, npt, r, th, ph, pown, of, &worst, &failed);
+      ok = check_many(w, nsel, sel, cg, ncg, npt, r, th, ph, pown, of, &worst, &failed);
     }
 
   /* direct sum of the checked functionals */
@@ -1971,6 +1875,8 @@ check_direct(const potsynth_workspace * w, const size_t nsel, const size_t * sel
   ws.tpost = NULL;
   ws.tfunc = NULL;
   ws.dW = NULL;
+  ws.obase = ws.ofunc = ws.opart = ws.osub = NULL; /* the subset's own table, below */
+  ws.ocol = ws.opost = NULL;
   ws.rpow = malloc(nsel * sizeof(int));
   ws.ccomp = malloc(nsel * sizeof(int));
   ws.cwt = malloc(nsel * sizeof(double));
@@ -1999,7 +1905,9 @@ check_direct(const potsynth_workspace * w, const size_t nsel, const size_t * sel
         }
       ws.pbase[nsel] = k;
 
-      status = potsynth_direct_init(&ws);
+      status = potsynth_op_table(&ws);
+      if (status == POTSYNTH_SUCCESS)
+        status = potsynth_direct_init(&ws);
       if (status == POTSYNTH_SUCCESS)
         {
           ew = potsynth_eval_alloc(0, &ws);
@@ -2018,6 +1926,12 @@ check_direct(const potsynth_workspace * w, const size_t nsel, const size_t * sel
   free(ws.pset);
   free(ws.ptheta);
   free(ws.pdphi);
+  free(ws.obase);
+  free(ws.ofunc);
+  free(ws.opart);
+  free(ws.osub);
+  free(ws.ocol);
+  free(ws.opost);
   if (ws.prfac)
     potsynth_aligned_free(ws.prfac);
 

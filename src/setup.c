@@ -204,6 +204,73 @@ potsynth_alloc_sets(const size_t lmin, const size_t lmax, const size_t mmax,
 }
 
 /*
+potsynth_have_coef()
+  Check that the coefficients of a model are there: they are freed after a fast
+set-up, so such a workspace cannot be set up again
+
+Return: success, or POTSYNTH_EINVAL (reported)
+*/
+
+int
+potsynth_have_coef(const potsynth_workspace * w)
+{
+  if (w->C == NULL || w->S == NULL)
+    {
+      POTSYNTH_ERROR ("the coefficients of the model were freed after its fast set-up", POTSYNTH_EINVAL);
+    }
+
+  return POTSYNTH_SUCCESS;
+}
+
+/*
+potsynth_op_table()
+  The operator terms of the parts (w->nop, obase, ofunc, opart, osub, ocol, opost),
+functional-major, then part, then term of the operator; built once, used by both
+methods
+
+Return: success or error
+*/
+
+int
+potsynth_op_table(potsynth_workspace * w)
+{
+  size_t c, p, t, q;
+
+  w->nop = 0;
+  for (p = 0; p < w->npart; ++p)
+    w->nop += potsynth_op_nterm(w->ptheta[p]);
+
+  w->obase = malloc((w->nfunc + 1) * sizeof(size_t));
+  w->ofunc = malloc((w->nop + 1) * sizeof(size_t));
+  w->opart = malloc((w->nop + 1) * sizeof(size_t));
+  w->osub = malloc((w->nop + 1) * sizeof(size_t));
+  w->ocol = malloc((w->nop + 1) * sizeof(int));
+  w->opost = malloc((w->nop + 1) * sizeof(int));
+  if (!w->obase || !w->ofunc || !w->opart || !w->osub || !w->ocol || !w->opost)
+    {
+      POTSYNTH_ERROR ("unable to allocate the operator terms", POTSYNTH_ENOMEM);
+    }
+
+  for (c = 0, q = 0; c < w->nfunc; ++c)
+    {
+      w->obase[c] = q;
+      for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
+        {
+          for (t = 0; t < potsynth_op_nterm(w->ptheta[p]); ++t, ++q)
+            {
+              w->ofunc[q] = c;
+              w->opart[q] = p;
+              w->osub[q] = t;
+              potsynth_op_term(w->ptheta[p], t, &(w->ocol[q]), &(w->opost[q]));
+            }
+        }
+    }
+  w->obase[w->nfunc] = q;
+
+  return POTSYNTH_SUCCESS;
+}
+
+/*
 potsynth_alloc_setp()
   potsynth_alloc_sets() with the coefficient sets given by pointers, so that a
 front-end can use the arrays of its caller without copying them into one block
@@ -410,6 +477,12 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
     }
   w->pbase[nfunc] = k;
 
+  if (potsynth_op_table(w) != POTSYNTH_SUCCESS)
+    {
+      potsynth_free(w);
+      return NULL; /* reported by potsynth_op_table() */
+    }
+
   /* field components; the outputs of a component given by the caller must have
      the same radial power (one radial basis bounds the error of the component) */
   {
@@ -576,6 +649,62 @@ potsynth_term_factors(const potsynth_workspace * w, const size_t p, const size_t
 }
 
 /*
+potsynth_term_weights()
+  Weight rows of one term of a part for order m, used by both methods: the
+factors of potsynth_term_factors() times the coefficients of one set, so that
+wa[l - m] and wb[l - m] multiply the two parts (cos m phi, sin m phi) of the
+Legendre column; 0 below lstart
+
+Inputs: w    - workspace
+        p    - part
+        sub  - term of the theta operator of the part
+        set  - coefficient set
+        m    - order
+        beta - factors per degree beta[l] (radial expansion, fast method), or NULL
+        wa   - (output) wa[l - m], l = m..lmax
+        wb   - (output) wb[l - m], l = m..lmax
+
+Return: lstart, as potsynth_term_factors()
+
+Notes:
+1) A phi derivative turns C cos + S sin into m (S cos - C sin)
+*/
+
+size_t
+potsynth_term_weights(const potsynth_workspace * w, const size_t p, const size_t sub, const size_t set,
+                      const size_t m, const double * beta, double * wa, double * wb)
+{
+  const size_t L = w->lmax;
+  const double dm = (double) m;
+  const double * C = w->C + set * w->nalf;
+  const double * S = w->S + set * w->nalf;
+  const size_t lstart = potsynth_term_factors(w, p, sub, m, beta, wa);
+  size_t l;
+
+  for (l = m; l < lstart && l <= L; ++l)
+    wb[l - m] = 0.0;
+
+  for (l = lstart; l <= L; ++l)
+    {
+      const size_t idx = potsynth_alf_idx(l, m, L);
+      const double f = wa[l - m];
+
+      if (w->pdphi[p] == 0)
+        {
+          wa[l - m] = f * C[idx];
+          wb[l - m] = f * S[idx];
+        }
+      else
+        {
+          wa[l - m] = f * dm * S[idx];
+          wb[l - m] = -f * dm * C[idx];
+        }
+    }
+
+  return lstart;
+}
+
+/*
 potsynth_radial_eval()
   Radial functions of the caller at a radius (models with w->nrad > 0)
 
@@ -634,6 +763,13 @@ potsynth_free(potsynth_workspace * w)
 
   if (w->ptheta)
     free(w->ptheta);
+
+  free(w->obase);
+  free(w->ofunc);
+  free(w->opart);
+  free(w->osub);
+  free(w->ocol);
+  free(w->opost);
 
   if (w->pdphi)
     free(w->pdphi);
@@ -696,7 +832,7 @@ potsynth_get_info(potsynth_info * info, const potsynth_workspace * w)
       info->nf1 = w->nf1;
       info->nf2 = w->nf2;
       info->nrows = w->nrows;
-      info->grid_bytes = w->nrows * w->ncols * w->nchp * sizeof(double);
+      info->grid_bytes = w->nrows * w->ncols * w->nlayp * sizeof(double);
       info->err_radial = w->radial_workspace_p->err;
       info->err_check = w->check_err;
     }
@@ -729,11 +865,11 @@ with the empirical cost models (seconds; measured on 16 threads, consistent
 with the measured break-even points to within about a factor 2, and near the
 break-even both methods cost about the same):
 
-t_setup  = 6.3e-12 nch L^3 + 7.8e-8 nch L^2
+t_setup  = 6.3e-12 nlay L^3 + 7.8e-8 nlay L^2
 t_direct = 3.5e-11 L^2 (1 + (nfunc - 1)/2)
-t_fast   = 1.5e-11 w^2 nch + 5e-8
+t_fast   = 1.5e-11 w^2 nlay + 5e-8
 
-where nch = nfunc * rho is the number of grid functionals; the radial rank is
+where nlay = nfunc * rho is the number of grid functionals; the radial rank is
 estimated from eps as rho ~ 2 + 0.7 log10(1/eps)
 */
 
@@ -752,10 +888,10 @@ auto_method(const size_t lmax, const size_t nfunc, const potsynth_parameters * p
       const double ww = (params->w > 0) ? (double) params->w :
                         (double) potsynth_window_choose(params->eps, sigma);
       const double rho = 2.0 + 0.7 * fmax(0.0, -log10(params->eps));
-      const double nch = (double) nfunc * rho;
-      const double t_setup = 6.3e-12 * nch * L * L * L + 7.8e-8 * nch * L * L;
+      const double nlay = (double) nfunc * rho;
+      const double t_setup = 6.3e-12 * nlay * L * L * L + 7.8e-8 * nlay * L * L;
       const double t_direct = 3.5e-11 * L * L * (1.0 + 0.5 * ((double) nfunc - 1.0));
-      const double t_fast = 1.5e-11 * ww * ww * nch + 5.0e-8;
+      const double t_fast = 1.5e-11 * ww * ww * nlay + 5.0e-8;
 
       return (t_setup + n * t_fast < n * t_direct) ? POTSYNTH_METHOD_FAST : POTSYNTH_METHOD_DIRECT;
     }

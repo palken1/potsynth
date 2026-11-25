@@ -56,6 +56,35 @@ static int radial_rank_check(const size_t lmin, const size_t lmax, const size_t 
                              const double * wn, const double tol, const radial_state_t * state,
                              size_t * rho);
 
+/* first functional with the radial power of functional c (c itself if none before) */
+static size_t
+radial_first(const size_t c, const int * rpow)
+{
+  size_t c2;
+
+  for (c2 = 0; c2 < c && rpow[c2] != rpow[c]; ++c2)
+    ;
+
+  return c2;
+}
+
+/* 1 if an earlier functional has the radial power of functional c and, when wn is given,
+   the same weights wn[c*L1 + l], l >= lmin: its rows need not be computed again */
+static int
+radial_repeat(const size_t c, const size_t lmin, const size_t L1, const int * rpow, const double * wn)
+{
+  size_t c2;
+
+  for (c2 = 0; c2 < c; ++c2)
+    {
+      if (rpow[c2] == rpow[c] &&
+          (wn == NULL || memcmp(wn + c2 * L1 + lmin, wn + c * L1 + lmin, (L1 - lmin) * sizeof(double)) == 0))
+        return 1;
+    }
+
+  return 0;
+}
+
 /*
 potsynth_radial_alloc()
   Compute the optimal radial basis for a set of functionals
@@ -615,15 +644,7 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nfunc, const int
   for (c = 0; c < nfunc; ++c)
     {
       size_t c2;
-      int seen = 0;
-
-      for (c2 = 0; c2 < c; ++c2)
-        {
-          if (rpow[c2] == rpow[c])
-            seen = 1;
-        }
-
-      if (seen)
+      if (radial_repeat(c, lmin, L1, rpow, NULL))
         continue;
 
       for (l = lmin; l <= lmax; ++l)
@@ -819,10 +840,7 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nfunc, const int
 
     for (c = 0; c < nfunc; ++c)
       {
-        size_t c2;
-
-        for (c2 = 0; c2 < c && rpow[c2] != rpow[c]; ++c2)
-          ;
+        const size_t c2 = radial_first(c, rpow);
 
         if (c2 < c)
           {
@@ -902,7 +920,7 @@ radial_rank_check(const size_t lmin, const size_t lmax, const size_t nfunc, cons
   double * sum1 = malloc(K1 * sizeof(double)); /* sum_l sqrt(2l+1) |wn_l| u_j^(l+rpow) */
   double * res = malloc(K1 * sizeof(double));
   double * den = malloc(K1 * sizeof(double));
-  size_t c, c2, j, l, r, need = *rho;
+  size_t c, j, l, r, need = *rho;
 
   if (!err1 || !sum1 || !res || !den)
     {
@@ -917,16 +935,7 @@ radial_rank_check(const size_t lmin, const size_t lmax, const size_t nfunc, cons
     {
       const double * wc = wn + c * L1;
       double fmax2 = 0.0, floor2 = 0.0;
-      int seen = 0;
-
-      for (c2 = 0; c2 < c; ++c2)
-        {
-          if (rpow[c2] == rpow[c] &&
-              memcmp(wn + c2 * L1 + lmin, wc + lmin, (L1 - lmin) * sizeof(double)) == 0)
-            seen = 1;
-        }
-
-      if (seen)
+      if (radial_repeat(c, lmin, L1, rpow, wn))
         continue; /* same component as an earlier functional */
 
       memset(err1, 0, (K1 + 1) * K1 * sizeof(double));
@@ -1055,7 +1064,7 @@ radial_direct_check(const size_t lmin, const size_t lmax, const size_t nfunc, co
   double * bu = malloc(M * rho * sizeof(double));
   double * T = malloc(nc * sizeof(double));
   double worst = 0.0;
-  size_t c, c2, m, i, k, l;
+  size_t c, m, i, k, l;
 
   if (!bu || !T)
     {
@@ -1087,16 +1096,7 @@ radial_direct_check(const size_t lmin, const size_t lmax, const size_t nfunc, co
     {
       const double * wc = wn + c * L1;
       double bmax = 0.0, fmax2 = 0.0;
-      int seen = 0;
-
-      for (c2 = 0; c2 < c; ++c2)
-        {
-          if (rpow[c2] == rpow[c] &&
-              memcmp(wn + c2 * L1 + lmin, wc + lmin, (L1 - lmin) * sizeof(double)) == 0)
-            seen = 1;
-        }
-
-      if (seen)
+      if (radial_repeat(c, lmin, L1, rpow, wn))
         continue;
 
       for (m = 0; m < M; ++m)

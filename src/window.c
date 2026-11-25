@@ -9,7 +9,6 @@
  * Copyright (C) 2026 Patrick Alken and Johnathan Burchill, BSD 3-Clause License
  */
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 
@@ -97,7 +96,7 @@ error in both directions. In tests (synthetic gravity model, L = 360 and 720, fu
 tensor, shells from r = a and from 21 km inside it; tests/test_window.c) the largest measured error
 at a point was 0.20-0.27 R; WINDOW_PEAK = 0.5 keeps a factor 2 on that. The
 width is raised until WINDOW_PEAK * R <= eps for every component, or up to
-POTSYNTH_WMAX. Quantities whose power lies well inside the band, such as the
+POTSYNTH_WMAX. Components whose power lies well inside the band, such as the
 magnetic field at satellite altitude for which the table was measured, keep
 the table's width.
 */
@@ -132,7 +131,7 @@ potsynth_window_choose_shell(const double eps, const double sigma, const size_t 
 
   for (; w <= POTSYNTH_WMAX; ++w)
     {
-      const double beta = M_PI * (1.0 - 1.0 / (2.0 * sigma)) * w;
+      const double beta = potsynth_window_beta(w, sigma);
       double emax = 0.0, worst = 0.0;
       size_t c, k, j;
 
@@ -175,10 +174,6 @@ potsynth_window_choose_shell(const double eps, const double sigma, const size_t 
           if (size > 0.0)
             worst = fmax(worst, err / size);
         }
-
-      if (getenv("POTSYNTH_DEBUG_WINDOW"))
-        fprintf(stderr, "potsynth: window w = %d: largest estimated error %.2e (x%.1f = %.2e), eps %.1e\n",
-                w, worst, WINDOW_PEAK, WINDOW_PEAK * worst, eps);
 
       if (WINDOW_PEAK * worst <= eps)
         break;
