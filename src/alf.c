@@ -292,32 +292,30 @@ potsynth_alf_column(const size_t m, const double * restrict x, const double * re
     }
 }
 
-/*
-potsynth_alf_accum()
-  Accumulate weighted sums over l of column values, split by the parity
-of l - m, for npair pairs of weight rows (A and B) sharing a source array
+/* a*b + c with one rounding where the hardware has fused multiply-add (fma() is
+ * then one instruction), so that no sum depends on which products the compiler
+ * contracts; without it nothing is contracted and a*b + c is used */
+#ifdef FP_FAST_FMA
+#define ALF_FMA(a, b, c) fma((a), (b), (c))
+#else
+#define ALF_FMA(a, b, c) ((a) * (b) + (c))
+#endif
 
-Inputs: nn    - column length, lmax - m + 1
-        npair - number of pairs
-        W     - weights, 2*npair rows of length ldw (row 2k = A, 2k+1 = B)
-        ldw   - leading dimension of W
-        src   - source of pair k: POTSYNTH_COL_Q, POTSYNTH_COL_E or POTSYNTH_COL_G
-        n0    - first index (l - m) of pair k
-        Q     - column values from potsynth_alf_column()
-        E     - column values from potsynth_alf_column(), or NULL if no pair uses E
-        G     - column values from potsynth_alf_column(), or NULL if no pair uses G
-        acc   - (output) sums, length 4*npair*POTSYNTH_NB:
-                acc[(4k+0)*NB + j] = sum_{l-m even} WA_k[l-m] src_k[l-m][j]
-                acc[(4k+1)*NB + j] = sum_{l-m odd}  WA_k[l-m] src_k[l-m][j]
-                acc[(4k+2)*NB + j], acc[(4k+3)*NB + j] = same for WB_k
+/*
+alf_accum_blocks()
+  Kernel of potsynth_alf_accum() for nblk (1 or 2) node blocks; the weights of
+each degree are loaded once for all nblk*POTSYNTH_NB nodes. Each node's sums are
+formed in the same order whatever nblk is (ALF_FMA)
 */
 
-void
-potsynth_alf_accum(const size_t nn, const size_t npair, const double * restrict W, const size_t ldw,
-                   const unsigned char * src, const size_t * n0,
-                   const double * restrict Q, const double * restrict E, const double * restrict G,
-                   double * restrict acc)
+static inline void
+alf_accum_blocks(const size_t nblk, const size_t nn, const size_t npair, const double * restrict W,
+                 const size_t ldw, const unsigned char * src, const size_t * n0,
+                 const double * restrict Q, const double * restrict E, const double * restrict G,
+                 const size_t bs, double * restrict acc)
 {
+  enum { NB2 = 2 * POTSYNTH_NB };
+  const size_t nj = nblk * POTSYNTH_NB;
   size_t k;
 
   for (k = 0; k < npair; ++k)
@@ -325,21 +323,26 @@ potsynth_alf_accum(const size_t nn, const size_t npair, const double * restrict 
       const double * restrict V = (src[k] == POTSYNTH_COL_Q) ? Q : (src[k] == POTSYNTH_COL_E) ? E : G;
       const double * restrict wa = W + 2 * k * ldw;
       const double * restrict wb = wa + ldw;
-      double ae[POTSYNTH_NB], ao[POTSYNTH_NB], be[POTSYNTH_NB], bo[POTSYNTH_NB];
-      size_t l = n0[k], j;
+      double ae[NB2], ao[NB2], be[NB2], bo[NB2];
+      size_t l = n0[k], j, h;
 
-      for (j = 0; j < POTSYNTH_NB; ++j)
+      for (j = 0; j < nj; ++j)
         ae[j] = ao[j] = be[j] = bo[j] = 0.0;
 
       /* make l even so that (l, l+1) = (even, odd) */
       if ((l & 1) && l < nn)
         {
-          const double * restrict v = V + l * POTSYNTH_NB;
-
-          for (j = 0; j < POTSYNTH_NB; ++j)
+          for (h = 0; h < nblk; ++h)
             {
-              ao[j] += wa[l] * v[j];
-              bo[j] += wb[l] * v[j];
+              const double * restrict v = V + h * bs + l * POTSYNTH_NB;
+              double * restrict po = ao + h * POTSYNTH_NB;
+              double * restrict qo = bo + h * POTSYNTH_NB;
+
+              for (j = 0; j < POTSYNTH_NB; ++j)
+                {
+                  po[j] = ALF_FMA(wa[l], v[j], po[j]);
+                  qo[j] = ALF_FMA(wb[l], v[j], qo[j]);
+                }
             }
 
           ++l;
@@ -349,37 +352,91 @@ potsynth_alf_accum(const size_t nn, const size_t npair, const double * restrict 
         {
           const double wa0 = wa[l], wa1 = wa[l + 1];
           const double wb0 = wb[l], wb1 = wb[l + 1];
-          const double * restrict v0 = V + l * POTSYNTH_NB;
-          const double * restrict v1 = v0 + POTSYNTH_NB;
 
-          for (j = 0; j < POTSYNTH_NB; ++j)
+          for (h = 0; h < nblk; ++h)
             {
-              ae[j] += wa0 * v0[j];
-              ao[j] += wa1 * v1[j];
-              be[j] += wb0 * v0[j];
-              bo[j] += wb1 * v1[j];
+              const double * restrict v0 = V + h * bs + l * POTSYNTH_NB;
+              const double * restrict v1 = v0 + POTSYNTH_NB;
+              double * restrict pe = ae + h * POTSYNTH_NB;
+              double * restrict po = ao + h * POTSYNTH_NB;
+              double * restrict qe = be + h * POTSYNTH_NB;
+              double * restrict qo = bo + h * POTSYNTH_NB;
+
+              for (j = 0; j < POTSYNTH_NB; ++j)
+                {
+                  pe[j] = ALF_FMA(wa0, v0[j], pe[j]);
+                  po[j] = ALF_FMA(wa1, v1[j], po[j]);
+                  qe[j] = ALF_FMA(wb0, v0[j], qe[j]);
+                  qo[j] = ALF_FMA(wb1, v1[j], qo[j]);
+                }
             }
         }
 
       if (l < nn)
         {
-          const double * restrict v = V + l * POTSYNTH_NB;
-
-          for (j = 0; j < POTSYNTH_NB; ++j)
+          for (h = 0; h < nblk; ++h)
             {
-              ae[j] += wa[l] * v[j];
-              be[j] += wb[l] * v[j];
+              const double * restrict v = V + h * bs + l * POTSYNTH_NB;
+              double * restrict pe = ae + h * POTSYNTH_NB;
+              double * restrict qe = be + h * POTSYNTH_NB;
+
+              for (j = 0; j < POTSYNTH_NB; ++j)
+                {
+                  pe[j] = ALF_FMA(wa[l], v[j], pe[j]);
+                  qe[j] = ALF_FMA(wb[l], v[j], qe[j]);
+                }
             }
         }
 
-      for (j = 0; j < POTSYNTH_NB; ++j)
+      for (j = 0; j < nj; ++j)
         {
-          acc[(4 * k + 0) * POTSYNTH_NB + j] = ae[j];
-          acc[(4 * k + 1) * POTSYNTH_NB + j] = ao[j];
-          acc[(4 * k + 2) * POTSYNTH_NB + j] = be[j];
-          acc[(4 * k + 3) * POTSYNTH_NB + j] = bo[j];
+          acc[(4 * k + 0) * nj + j] = ae[j];
+          acc[(4 * k + 1) * nj + j] = ao[j];
+          acc[(4 * k + 2) * nj + j] = be[j];
+          acc[(4 * k + 3) * nj + j] = bo[j];
         }
     }
+}
+
+/*
+potsynth_alf_accum()
+  Accumulate weighted sums over l of column values, split by the parity
+of l - m, for npair pairs of weight rows (A and B) sharing a source array,
+over one or two blocks of POTSYNTH_NB nodes
+
+Inputs: nblk  - number of node blocks, 1 or 2
+        nn    - column length, lmax - m + 1
+        npair - number of pairs
+        W     - weights, 2*npair rows of length ldw (row 2k = A, 2k+1 = B)
+        ldw   - leading dimension of W
+        src   - source of pair k: POTSYNTH_COL_Q, POTSYNTH_COL_E or POTSYNTH_COL_G
+        n0    - first index (l - m) of pair k
+        Q     - column values from potsynth_alf_column(), block h at Q + h*bs
+        E     - same for E, or NULL if no pair uses E
+        G     - same for G, or NULL if no pair uses G
+        bs    - offset between the blocks of Q, E and G
+        acc   - (output) sums, length 4*npair*nj with nj = nblk*POTSYNTH_NB, node
+                j = h*POTSYNTH_NB + i (node i of block h):
+                acc[(4k+0)*nj + j] = sum_{l-m even} WA_k[l-m] src_k[l-m][j]
+                acc[(4k+1)*nj + j] = sum_{l-m odd}  WA_k[l-m] src_k[l-m][j]
+                acc[(4k+2)*nj + j], acc[(4k+3)*nj + j] = same for WB_k
+
+Notes:
+1) The weight rows are the largest operand (2*npair*(lmax+1) doubles, beyond L1
+and often L2); with two blocks they are read once per 2*POTSYNTH_NB nodes.
+The sums are bit for bit the same for one or two blocks
+*/
+
+void
+potsynth_alf_accum(const size_t nblk, const size_t nn, const size_t npair, const double * restrict W,
+                   const size_t ldw, const unsigned char * src, const size_t * n0,
+                   const double * restrict Q, const double * restrict E, const double * restrict G,
+                   const size_t bs, double * restrict acc)
+{
+  if (nblk == 2)
+    alf_accum_blocks(2, nn, npair, W, ldw, src, n0, Q, E, G, bs, acc);
+  else
+    alf_accum_blocks(1, nn, npair, W, ldw, src, n0, Q, E, G, bs, acc);
 }
 
 /*

@@ -254,30 +254,34 @@ test_alf_scale(void)
   ps_test_int(test_last_error(), POTSYNTH_EUNSUP, "alf: beyond POTSYNTH_LMAX error code");
 }
 
-/* potsynth_alf_accum() against long double sums, random sizes and start indices */
+/* potsynth_alf_accum() against long double sums, random sizes and start indices,
+ * one and two node blocks; two blocks must give the sums of one block bit for bit */
 static void
 test_alf_accum(void)
 {
+  enum { NB = POTSYNTH_NB };
   double maxerr = 0.0;
-  size_t trial;
+  size_t ndiff = 0, trial;
 
   for (trial = 0; trial < 200; ++trial)
     {
       const size_t nn = 1 + (size_t) (test_urand() * 60);
       const size_t npair = 1 + (size_t) (test_urand() * 5);
       const size_t ldw = nn + 3;
+      const size_t bs = nn * NB + 5; /* offset of the second block */
       double * W = malloc(2 * npair * ldw * sizeof(double));
-      double * Q = malloc(nn * POTSYNTH_NB * sizeof(double));
-      double * E = malloc(nn * POTSYNTH_NB * sizeof(double));
-      double * acc = malloc(4 * npair * POTSYNTH_NB * sizeof(double));
+      double * Q = malloc(2 * bs * sizeof(double));
+      double * E = malloc(2 * bs * sizeof(double));
+      double * acc2 = malloc(8 * npair * NB * sizeof(double));
+      double * acc1 = malloc(4 * npair * NB * sizeof(double));
       unsigned char * src = malloc(npair);
       size_t * n0 = malloc(npair * sizeof(size_t));
-      size_t i, k, j, l;
+      size_t i, k, j, l, h;
 
       for (i = 0; i < 2 * npair * ldw; ++i)
         W[i] = 2.0 * test_urand() - 1.0;
 
-      for (i = 0; i < nn * POTSYNTH_NB; ++i)
+      for (i = 0; i < 2 * bs; ++i)
         {
           Q[i] = 2.0 * test_urand() - 1.0;
           E[i] = 2.0 * test_urand() - 1.0;
@@ -289,35 +293,49 @@ test_alf_accum(void)
           n0[k] = (size_t) (test_urand() * (nn + 1)); /* includes n0 = nn (empty) */
         }
 
-      potsynth_alf_accum(nn, npair, W, ldw, src, n0, Q, E, NULL, acc);
+      potsynth_alf_accum(2, nn, npair, W, ldw, src, n0, Q, E, NULL, bs, acc2);
 
-      for (k = 0; k < npair; ++k)
+      for (h = 0; h < 2; ++h)
         {
-          for (j = 0; j < POTSYNTH_NB; ++j)
+          potsynth_alf_accum(1, nn, npair, W, ldw, src, n0, Q + h * bs, E + h * bs, NULL, 0, acc1);
+
+          for (k = 0; k < npair; ++k)
             {
-              const double * V = src[k] ? E : Q;
-              long double ref[4] = { 0.0L, 0.0L, 0.0L, 0.0L };
-
-              for (l = n0[k]; l < nn; ++l)
+              for (j = 0; j < NB; ++j)
                 {
-                  ref[0 + (l & 1)] += (long double) W[2 * k * ldw + l] * V[l * POTSYNTH_NB + j];
-                  ref[2 + (l & 1)] += (long double) W[(2 * k + 1) * ldw + l] * V[l * POTSYNTH_NB + j];
-                }
+                  const double * V = (src[k] ? E : Q) + h * bs;
+                  long double ref[4] = { 0.0L, 0.0L, 0.0L, 0.0L };
 
-              for (i = 0; i < 4; ++i)
-                maxerr = fmax(maxerr, (double) fabsl(acc[(4 * k + i) * POTSYNTH_NB + j] - ref[i]));
+                  for (l = n0[k]; l < nn; ++l)
+                    {
+                      ref[0 + (l & 1)] += (long double) W[2 * k * ldw + l] * V[l * NB + j];
+                      ref[2 + (l & 1)] += (long double) W[(2 * k + 1) * ldw + l] * V[l * NB + j];
+                    }
+
+                  for (i = 0; i < 4; ++i)
+                    {
+                      const double a1 = acc1[(4 * k + i) * NB + j];
+                      const double a2 = acc2[(4 * k + i) * 2 * NB + h * NB + j];
+
+                      maxerr = fmax(maxerr, (double) fabsl(a1 - ref[i]));
+                      maxerr = fmax(maxerr, (double) fabsl(a2 - ref[i]));
+                      ndiff += (memcmp(&a1, &a2, sizeof(double)) != 0);
+                    }
+                }
             }
         }
 
       free(W);
       free(Q);
       free(E);
-      free(acc);
+      free(acc1);
+      free(acc2);
       free(src);
       free(n0);
     }
 
   ps_test(maxerr > 1.0e-13, "alf: accumulation kernel (error %.2e)", maxerr);
+  ps_test(ndiff != 0, "alf: two node blocks differ from one block in %zu sums", ndiff);
 }
 
 static void

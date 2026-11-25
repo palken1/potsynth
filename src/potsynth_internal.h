@@ -272,9 +272,10 @@ void potsynth_alf_column_q(const size_t m, const double * x, double * Q, double 
                            const potsynth_alf_workspace * w);
 void potsynth_alf_column(const size_t m, const double * x, const double * s,
                          double * Q, double * E, double * G, const potsynth_alf_workspace * w);
-void potsynth_alf_accum(const size_t nn, const size_t npair, const double * W, const size_t ldw,
-                        const unsigned char * src, const size_t * n0,
-                        const double * Q, const double * E, const double * G, double * acc);
+void potsynth_alf_accum(const size_t nblk, const size_t nn, const size_t npair, const double * W,
+                        const size_t ldw, const unsigned char * src, const size_t * n0,
+                        const double * Q, const double * E, const double * G, const size_t bs,
+                        double * acc);
 size_t potsynth_op_nterm(const int op);
 void potsynth_op_term(const int op, const size_t sub, int * col, int * post);
 double potsynth_op_factor(const int op, const size_t sub, const size_t l, const size_t m);

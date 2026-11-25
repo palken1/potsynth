@@ -358,10 +358,11 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
       thread->W = potsynth_aligned_alloc(2 * state->nterm * L1 * sizeof(double));
       thread->n0 = malloc(state->nterm * sizeof(size_t));
       thread->src = malloc(state->nterm);
-      thread->Q = potsynth_aligned_alloc(L1 * POTSYNTH_NB * sizeof(double));
-      thread->E = state->needE ? potsynth_aligned_alloc(L1 * POTSYNTH_NB * sizeof(double)) : NULL;
-      thread->G = state->needG ? potsynth_aligned_alloc(L1 * POTSYNTH_NB * sizeof(double)) : NULL;
-      thread->acc = potsynth_aligned_alloc(4 * state->nterm * POTSYNTH_NB * sizeof(double));
+      /* two node blocks per pass of potsynth_alf_accum() */
+      thread->Q = potsynth_aligned_alloc(2 * L1 * POTSYNTH_NB * sizeof(double));
+      thread->E = state->needE ? potsynth_aligned_alloc(2 * L1 * POTSYNTH_NB * sizeof(double)) : NULL;
+      thread->G = state->needG ? potsynth_aligned_alloc(2 * L1 * POTSYNTH_NB * sizeof(double)) : NULL;
+      thread->acc = potsynth_aligned_alloc(8 * state->nterm * POTSYNTH_NB * sizeof(double));
       thread->S = potsynth_aligned_alloc(4 * state->nterm * state->nqp * sizeof(double));
       thread->H = potsynth_aligned_alloc(2 * FAST_TBLK * state->Nt * sizeof(double));
       thread->Z = potsynth_aligned_alloc(2 * w->nlay * w->nf1 * sizeof(double));
@@ -507,21 +508,35 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
       thread->n0[k] = lstart - m;
     }
 
-  /* recursion + accumulation over node blocks of the first quadrant */
-  for (b = 0; b < nqp; b += POTSYNTH_NB)
+  /* recursion + accumulation over node blocks of the first quadrant, two blocks
+   * per pass so that the weight rows are read once per 2*POTSYNTH_NB nodes */
+  for (b = 0; b < nqp; b += 2 * POTSYNTH_NB)
     {
-      if (state->needE)
-        potsynth_alf_column(m, state->xq + b, state->sq + b, thread->Q, thread->E, thread->G,
-                            w->alf_workspace_p);
-      else
-        potsynth_alf_column_q(m, state->xq + b, thread->Q, thread->G, w->alf_workspace_p);
-      potsynth_alf_accum(nn, state->nterm, thread->W, L1, thread->src, thread->n0, thread->Q,
-                         thread->E, thread->G, thread->acc);
+      const size_t bs = L1 * POTSYNTH_NB;
+      const size_t nblk = (b + POTSYNTH_NB < nqp) ? 2 : 1;
+      const size_t nj = nblk * POTSYNTH_NB;
+      size_t h;
+
+      for (h = 0; h < nblk; ++h)
+        {
+          const size_t bh = b + h * POTSYNTH_NB;
+
+          if (state->needE)
+            potsynth_alf_column(m, state->xq + bh, state->sq + bh, thread->Q + h * bs,
+                                thread->E + h * bs, thread->G ? thread->G + h * bs : NULL,
+                                w->alf_workspace_p);
+          else
+            potsynth_alf_column_q(m, state->xq + bh, thread->Q + h * bs,
+                                  thread->G ? thread->G + h * bs : NULL, w->alf_workspace_p);
+        }
+
+      potsynth_alf_accum(nblk, nn, state->nterm, thread->W, L1, thread->src, thread->n0, thread->Q,
+                         thread->E, thread->G, bs, thread->acc);
 
       for (k = 0; k < 4 * state->nterm; ++k)
         {
-          for (j = 0; j < POTSYNTH_NB; ++j)
-            thread->S[k * nqp + b + j] = thread->acc[k * POTSYNTH_NB + j];
+          for (j = 0; j < nj; ++j)
+            thread->S[k * nqp + b + j] = thread->acc[k * nj + j];
         }
     }
 
