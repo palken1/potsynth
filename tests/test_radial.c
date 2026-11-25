@@ -33,7 +33,7 @@ the largest weighted function value
 
 static double
 test_radial_error(const double u0, const double u1, const size_t lmin, const size_t lmax,
-                  const size_t nchan, const int * rpow, const double * wn,
+                  const size_t nfunc, const int * rpow, const double * wn,
                   const potsynth_radial_workspace * w)
 {
   const size_t L1 = lmax + 1;
@@ -41,7 +41,7 @@ test_radial_error(const double u0, const double u1, const size_t lmin, const siz
   double emax = 0.0, fmaxv = 0.0;
   size_t c, l, g, i;
 
-  for (c = 0; c < nchan; ++c)
+  for (c = 0; c < nfunc; ++c)
     {
       for (l = lmin; l <= lmax; ++l)
         {
@@ -89,8 +89,8 @@ test_radial(void)
 
       for (l = 0; l <= L; ++l)
         {
-          wn[l] = (l + 1.0) * pow(0.8, (double) l); /* channel 0 */
-          wn[L1 + l] = pow(0.8, (double) l);        /* channel 1 */
+          wn[l] = (l + 1.0) * pow(0.8, (double) l); /* functional 0 */
+          wn[L1 + l] = pow(0.8, (double) l);        /* functional 1 */
         }
 
       for (it = 0; it < sizeof(tols) / sizeof(tols[0]); ++it)

@@ -4,9 +4,9 @@
  * Fast synthesis of internal potential-field models at scattered points:
  * generic (field-agnostic) interface. Physical front-ends (potsynth_mag.h,
  * potsynth_grav.h, potsynth_vsh.h) translate their quantities into the
- * channels defined here.
+ * functionals defined here.
  *
- * Each channel c is the quantity
+ * Each functional c is
  *
  * f_c(r,theta,phi) = \sum_{l=lmin}^{lmax} \sum_{m=0}^{min(l,mmax)}
  *                      rfac_c(l) (a/r)^(l + rpow_c) T_c[ Pbar_l^m(cos theta) ]
@@ -98,7 +98,10 @@ typedef struct
   const double * rfac;  /* per-degree factors rfac[l], l = 0..lmax, or NULL for 1; copied at allocation */
   int theta;            /* operator in theta (POTSYNTH_THETA_xxx) */
   int dphi;             /* number of phi derivatives: 0 or 1 */
-} potsynth_channel;
+} potsynth_functional;
+
+/* former name of potsynth_functional (deprecated) */
+typedef potsynth_functional potsynth_channel;
 
 /* one term of an output of a model with several coefficient sets (potsynth_alloc_sets()):
    fac * rfac[l] * T[Pbar_l^m] D[C_lm cos(m phi) + S_lm sin(m phi)] with the coefficients of one set */
@@ -152,7 +155,7 @@ typedef struct
 
 typedef struct
 {
-  double eps;           /* requested accuracy relative to max of each quantity, default 1e-10 */
+  double eps;           /* requested accuracy relative to max of each irreducible component, default 1e-10 */
   int method;           /* POTSYNTH_METHOD_xxx, default POTSYNTH_METHOD_AUTO */
   double sigma;         /* grid oversampling factor, at least 1; 0 = default (2) */
   int w;                /* window width; 0 = chosen from eps */
@@ -171,9 +174,9 @@ typedef struct
   size_t lmin;          /* minimum SH degree */
   size_t lmax;          /* maximum SH degree */
   size_t mmax;          /* maximum SH order */
-  size_t nchan;         /* number of channels */
-  size_t nout;         /* outputs per point written by potsynth_eval() (= nchan, or more with
-                           a front-end output map, e.g. 6 tensor components from 5 channels) */
+  size_t nfunc;         /* number of functionals */
+  size_t nout;         /* outputs per point written by potsynth_eval() (= nfunc, or more with
+                           a front-end output map, e.g. 6 tensor components from 5 functionals) */
   int method;           /* method selected (POTSYNTH_METHOD_FAST or POTSYNTH_METHOD_DIRECT) */
   int w;                /* window width */
   double sigma;         /* oversampling factor */
@@ -183,7 +186,7 @@ typedef struct
   size_t nf2;           /* fine grid size in phi */
   size_t nrows;         /* stored grid rows */
   size_t grid_bytes;    /* memory used by the grid */
-  size_t ncomp;         /* number of field components (the quantities eps is relative to) */
+  size_t ncomp;         /* number of irreducible components (eps is relative to each) */
   double err_radial;    /* bound of the error of the radial basis over the shell, relative to
                            the size of each component (at most rank_tol where it is reachable);
                            -1 if not known (radial functions of the caller, model read from a file) */
@@ -223,7 +226,7 @@ POTSYNTH_API size_t potsynth_nlm(const size_t lmin, const size_t lmax, const siz
 POTSYNTH_API potsynth_workspace * potsynth_alloc(const size_t lmin, const size_t lmax, const size_t mmax,
                                                  const double * coef, const double a,
                                                  const double rmin, const double rmax,
-                                                 const size_t nchan, const potsynth_channel * chan,
+                                                 const size_t nfunc, const potsynth_functional * func,
                                                  const potsynth_parameters * params);
 POTSYNTH_API potsynth_workspace * potsynth_alloc_sets(const size_t lmin, const size_t lmax, const size_t mmax,
                                                       const size_t nset, const double * coef,

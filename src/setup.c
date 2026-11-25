@@ -12,7 +12,7 @@
 
 #include "potsynth_internal.h"
 
-static int auto_method(const size_t lmax, const size_t nchan, const potsynth_parameters * params);
+static int auto_method(const size_t lmax, const size_t nfunc, const potsynth_parameters * params);
 
 /*
 potsynth_default_parameters()
@@ -63,7 +63,7 @@ potsynth_nlm(const size_t lmin, const size_t lmax, const size_t mmax)
 
 /*
 potsynth_alloc()
-  Allocate a model workspace with user-defined channels
+  Allocate a model workspace with user-defined functionals
 
 Inputs: lmin   - minimum SH degree (>= 0)
         lmax   - maximum SH degree (<= POTSYNTH_LMAX)
@@ -73,8 +73,8 @@ Inputs: lmin   - minimum SH degree (>= 0)
         a      - reference radius (same unit as r)
         rmin   - minimum radius of evaluation points (fast method; ignored by direct method)
         rmax   - maximum radius of evaluation points (fast method; ignored by direct method)
-        nchan  - number of channels
-        chan   - channel definitions, length nchan; rfac arrays are copied
+        nfunc  - number of functionals
+        func   - functional definitions, length nfunc; rfac arrays are copied
         params - parameters, or NULL for defaults
 
 Return: pointer to workspace, or NULL on error
@@ -87,44 +87,44 @@ radial functions, so evaluation is faster
 potsynth_workspace *
 potsynth_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const double * coef,
                const double a, const double rmin, const double rmax,
-               const size_t nchan, const potsynth_channel * chan, const potsynth_parameters * params)
+               const size_t nfunc, const potsynth_functional * func, const potsynth_parameters * params)
 {
   potsynth_workspace * w;
   potsynth_output * out;
   potsynth_term * term;
   size_t c;
 
-  if (coef == NULL || chan == NULL || nchan == 0)
+  if (coef == NULL || func == NULL || nfunc == 0)
     {
-      POTSYNTH_ERROR_NULL ("coef and channels must be given", POTSYNTH_EINVAL);
+      POTSYNTH_ERROR_NULL ("coef and functionals must be given", POTSYNTH_EINVAL);
     }
 
-  out = malloc(nchan * sizeof(potsynth_output));
-  term = malloc(nchan * sizeof(potsynth_term));
+  out = malloc(nfunc * sizeof(potsynth_output));
+  term = malloc(nfunc * sizeof(potsynth_term));
   if (out == NULL || term == NULL)
     {
       free(out);
       free(term);
-      POTSYNTH_ERROR_NULL ("unable to allocate channel terms", POTSYNTH_ENOMEM);
+      POTSYNTH_ERROR_NULL ("unable to allocate functional terms", POTSYNTH_ENOMEM);
     }
 
-  /* each channel is one term of coefficient set 0 */
-  for (c = 0; c < nchan; ++c)
+  /* each functional is one term of coefficient set 0 */
+  for (c = 0; c < nfunc; ++c)
     {
       term[c].set = 0;
       term[c].fac = 1.0;
-      term[c].rfac = chan[c].rfac;
-      term[c].theta = chan[c].theta;
-      term[c].dphi = chan[c].dphi;
+      term[c].rfac = func[c].rfac;
+      term[c].theta = func[c].theta;
+      term[c].dphi = func[c].dphi;
 
-      out[c].rpow = chan[c].rpow;
+      out[c].rpow = func[c].rpow;
       out[c].nterm = 1;
       out[c].term = &term[c];
       out[c].component = 0;
       out[c].weight = 0.0;
     }
 
-  w = potsynth_alloc_sets(lmin, lmax, mmax, 1, coef, a, rmin, rmax, NULL, nchan, out, params);
+  w = potsynth_alloc_sets(lmin, lmax, mmax, 1, coef, a, rmin, rmax, NULL, nfunc, out, params);
 
   free(out);
   free(term);
@@ -225,7 +225,7 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
   const potsynth_parameters p = (params != NULL) ? *params : potsynth_default_parameters();
   const size_t L1 = lmax + 1;
   const size_t nlm = L1 * (lmax + 2) / 2;
-  const size_t nchan = nout;
+  const size_t nfunc = nout;
   const size_t nrad = (radial != NULL) ? radial->n : 0;
   potsynth_workspace * w;
   size_t npart = 0;
@@ -274,7 +274,7 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
       POTSYNTH_ERROR_NULL ("colatitude range must satisfy 0 <= theta_min <= theta_max <= pi", POTSYNTH_EINVAL);
     }
 
-  for (c = 0; c < nchan; ++c)
+  for (c = 0; c < nfunc; ++c)
     {
       if (out[c].nterm == 0 || out[c].term == NULL)
         {
@@ -336,8 +336,8 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
   w->a = a;
   w->rmin = rmin;
   w->rmax = rmax;
-  w->nchan = nchan;
-  w->nout = nchan;
+  w->nfunc = nfunc;
+  w->nout = nfunc;
   w->params = p;
   w->check_err = -1.0;
   w->nthreads = potsynth_max_threads(p.nthreads);
@@ -348,7 +348,7 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
     {
       /* the fast method needs the radial range of the points */
       if (rmin > 0.0 && rmin <= rmax && isfinite(rmax))
-        w->method = auto_method(lmax, nchan, &p);
+        w->method = auto_method(lmax, nfunc, &p);
       else
         w->method = POTSYNTH_METHOD_DIRECT;
     }
@@ -367,10 +367,10 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
   w->nset = nset;
   w->nalf = nlm;
   w->npart = npart;
-  w->rpow = malloc(nchan * sizeof(int));
-  w->ccomp = malloc(nchan * sizeof(int));
-  w->cwt = malloc(nchan * sizeof(double));
-  w->pbase = malloc((nchan + 1) * sizeof(size_t));
+  w->rpow = malloc(nfunc * sizeof(int));
+  w->ccomp = malloc(nfunc * sizeof(int));
+  w->cwt = malloc(nfunc * sizeof(double));
+  w->pbase = malloc((nfunc + 1) * sizeof(size_t));
   w->pset = malloc(npart * sizeof(size_t));
   w->ptheta = malloc(npart * sizeof(int));
   w->pdphi = malloc(npart * sizeof(int));
@@ -383,7 +383,7 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
       POTSYNTH_ERROR_NULL ("unable to allocate model arrays", POTSYNTH_ENOMEM);
     }
 
-  for (c = 0, k = 0; c < nchan; ++c)
+  for (c = 0, k = 0; c < nfunc; ++c)
     {
       w->rpow[c] = (nrad > 0) ? 0 : out[c].rpow;
       w->ccomp[c] = out[c].component;
@@ -407,12 +407,12 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
             }
         }
     }
-  w->pbase[nchan] = k;
+  w->pbase[nfunc] = k;
 
   /* field components; the outputs of a component given by the caller must have
      the same radial power (one radial basis bounds the error of the component) */
   {
-    size_t * grp = malloc(nchan * sizeof(size_t));
+    size_t * grp = malloc(nfunc * sizeof(size_t));
     size_t c2;
     int bad = 0;
 
@@ -422,9 +422,9 @@ potsynth_alloc_setp(const size_t lmin, const size_t lmax, const size_t mmax,
         POTSYNTH_ERROR_NULL ("unable to allocate model arrays", POTSYNTH_ENOMEM);
       }
 
-    w->ncomp = potsynth_quantities(w, grp);
+    w->ncomp = potsynth_components(w, grp);
 
-    for (c = 0; c < nchan && !bad; ++c)
+    for (c = 0; c < nfunc && !bad; ++c)
       {
         for (c2 = 0; c2 < c && !bad; ++c2)
           bad = (grp[c2] == grp[c] && w->rpow[c2] != w->rpow[c]);
@@ -677,7 +677,7 @@ potsynth_get_info(potsynth_info * info, const potsynth_workspace * w)
   info->lmin = w->lmin;
   info->lmax = w->lmax;
   info->mmax = w->mmax;
-  info->nchan = w->nchan;
+  info->nfunc = w->nfunc;
   info->nout = w->nout;
   info->method = w->method;
 
@@ -705,7 +705,7 @@ auto_method()
   Choose the evaluation method for POTSYNTH_METHOD_AUTO
 
 Inputs: lmax   - maximum SH degree
-        nchan  - number of channels
+        nfunc  - number of functionals
         params - parameters (eps, npts_hint)
 
 Return: POTSYNTH_METHOD_FAST or POTSYNTH_METHOD_DIRECT
@@ -724,15 +724,15 @@ with the measured break-even points to within about a factor 2, and near the
 break-even both methods cost about the same):
 
 t_setup  = 6.3e-12 nch L^3 + 7.8e-8 nch L^2
-t_direct = 3.5e-11 L^2 (1 + (nchan - 1)/2)
+t_direct = 3.5e-11 L^2 (1 + (nfunc - 1)/2)
 t_fast   = 1.5e-11 w^2 nch + 5e-8
 
-where nch = nchan * rho is the number of grid channels; the radial rank is
+where nch = nfunc * rho is the number of grid functionals; the radial rank is
 estimated from eps as rho ~ 2 + 0.7 log10(1/eps)
 */
 
 static int
-auto_method(const size_t lmax, const size_t nchan, const potsynth_parameters * params)
+auto_method(const size_t lmax, const size_t nfunc, const potsynth_parameters * params)
 {
   if (params->npts_hint == 0)
     {
@@ -746,9 +746,9 @@ auto_method(const size_t lmax, const size_t nchan, const potsynth_parameters * p
       const double ww = (params->w > 0) ? (double) params->w :
                         (double) potsynth_window_choose(params->eps, sigma);
       const double rho = 2.0 + 0.7 * fmax(0.0, -log10(params->eps));
-      const double nch = (double) nchan * rho;
+      const double nch = (double) nfunc * rho;
       const double t_setup = 6.3e-12 * nch * L * L * L + 7.8e-8 * nch * L * L;
-      const double t_direct = 3.5e-11 * L * L * (1.0 + 0.5 * ((double) nchan - 1.0));
+      const double t_direct = 3.5e-11 * L * L * (1.0 + 0.5 * ((double) nfunc - 1.0));
       const double t_fast = 1.5e-11 * ww * ww * nch + 5.0e-8;
 
       return (t_setup + n * t_fast < n * t_direct) ? POTSYNTH_METHOD_FAST : POTSYNTH_METHOD_DIRECT;
@@ -757,12 +757,12 @@ auto_method(const size_t lmax, const size_t nchan, const potsynth_parameters * p
 
 /*
 potsynth_set_outputs()
-  Define the outputs of a model as linear combinations of its channels; used
-by the front-ends (e.g. 6 tensor components from 5 channels)
+  Define the outputs of a model as linear combinations of its functionals; used
+by the front-ends (e.g. 6 tensor components from 5 functionals)
 
 Inputs: w    - workspace
         nout - number of outputs per point
-        map  - output k = sum_c map[k*nchan + c] channel c, length nout*nchan; copied
+        map  - output k = sum_c map[k*nfunc + c] functional c, length nout*nfunc; copied
 
 Return: success or error
 
@@ -773,26 +773,26 @@ Notes:
 int
 potsynth_set_outputs(potsynth_workspace * w, const size_t nout, const double * map)
 {
-  if (nout < w->nchan || map == NULL)
+  if (nout < w->nfunc || map == NULL)
     {
       POTSYNTH_ERROR ("invalid output map", POTSYNTH_EINVAL);
     }
 
-  w->omap = malloc(nout * w->nchan * sizeof(double));
+  w->omap = malloc(nout * w->nfunc * sizeof(double));
   if (w->omap == NULL)
     {
       POTSYNTH_ERROR ("unable to allocate output map", POTSYNTH_ENOMEM);
     }
 
-  memcpy(w->omap, map, nout * w->nchan * sizeof(double));
+  memcpy(w->omap, map, nout * w->nfunc * sizeof(double));
   w->nout = nout;
 
   return POTSYNTH_SUCCESS;
 }
 
 /*
-potsynth_tensor_channels()
-  Define the five channels of the gradient tensor T = grad grad V of
+potsynth_tensor_functionals()
+  Define the five functionals of the gradient tensor T = grad grad V of
 V = sum (a/r)^(l+1) Pbar_l^m [C cos(m phi) + S sin(m phi)], scaled by f:
 
 T_rr = f (l+1)(l+2) u^(l+3) P,      T_rt = -f (l+2) u^(l+3) dP/dtheta,
@@ -801,16 +801,16 @@ D    = T_tt - T_pp = f u^(l+3) S2A,  T_tp = f u^(l+3) S2B d/dphi
 
 Inputs: lmax - maximum SH degree
         f    - scale factor (1/a^2 for the unit potential above)
-        chan - (output) 5 channels
-        rfac - (output) per-degree factors referenced by chan, length 5*(lmax+1)
+        func - (output) 5 functionals
+        rfac - (output) per-degree factors referenced by func, length 5*(lmax+1)
 
 Notes:
 1) See the documentation, "The gradient tensor"; potsynth_tensor_map()
-gives the six components from the five channels
+gives the six components from the five functionals
 */
 
 void
-potsynth_tensor_channels(const size_t lmax, const double f, potsynth_channel * chan, double * rfac)
+potsynth_tensor_functionals(const size_t lmax, const double f, potsynth_functional * func, double * rfac)
 {
   const size_t L1 = lmax + 1;
   const int ops[5] = { POTSYNTH_THETA_P, POTSYNTH_THETA_DP, POTSYNTH_THETA_PSIN,
@@ -831,33 +831,33 @@ potsynth_tensor_channels(const size_t lmax, const double f, potsynth_channel * c
 
   for (c = 0; c < 5; ++c)
     {
-      chan[c].rpow = 3;
-      chan[c].rfac = rfac + c * L1;
-      chan[c].theta = ops[c];
-      chan[c].dphi = dphi[c];
+      func[c].rpow = 3;
+      func[c].rfac = rfac + c * L1;
+      func[c].theta = ops[c];
+      func[c].dphi = dphi[c];
     }
 }
 
 /*
 potsynth_tensor_map()
   Rows of an output map giving the six tensor components
-(rr, rt, rp, tt, tp, pp) from the five channels of potsynth_tensor_channels():
+(rr, rt, rp, tt, tp, pp) from the five functionals of potsynth_tensor_functionals():
 T_tt = (-T_rr + D)/2, T_pp = (-T_rr - D)/2 (zero trace)
 
-Inputs: nchan - number of channels of the model
-        c0    - index of the first tensor channel
-        map   - (output) 6 rows of length nchan, zeroed by the caller
+Inputs: nfunc - number of functionals of the model
+        c0    - index of the first tensor functional
+        map   - (output) 6 rows of length nfunc, zeroed by the caller
 */
 
 void
-potsynth_tensor_map(const size_t nchan, const size_t c0, double * map)
+potsynth_tensor_map(const size_t nfunc, const size_t c0, double * map)
 {
-  map[0 * nchan + c0] = 1.0;
-  map[1 * nchan + c0 + 1] = 1.0;
-  map[2 * nchan + c0 + 2] = 1.0;
-  map[3 * nchan + c0] = -0.5;
-  map[3 * nchan + c0 + 3] = 0.5;
-  map[4 * nchan + c0 + 4] = 1.0;
-  map[5 * nchan + c0] = -0.5;
-  map[5 * nchan + c0 + 3] = -0.5;
+  map[0 * nfunc + c0] = 1.0;
+  map[1 * nfunc + c0 + 1] = 1.0;
+  map[2 * nfunc + c0 + 2] = 1.0;
+  map[3 * nfunc + c0] = -0.5;
+  map[3 * nfunc + c0 + 3] = 0.5;
+  map[4 * nfunc + c0 + 4] = 1.0;
+  map[5 * nfunc + c0] = -0.5;
+  map[5 * nfunc + c0 + 3] = -0.5;
 }

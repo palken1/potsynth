@@ -57,7 +57,7 @@ test_io_roundtrip(const char * desc, potsynth_workspace * w, const potsynth_radi
       size_t ndiff = 0;
 
       potsynth_get_info(&i2, w2);
-      ps_test(i1.lmax != i2.lmax || i1.nchan != i2.nchan || i1.nout != i2.nout || i1.w != i2.w ||
+      ps_test(i1.lmax != i2.lmax || i1.nfunc != i2.nfunc || i1.nout != i2.nout || i1.w != i2.w ||
               i1.rho != i2.rho || i1.nrows != i2.nrows || i1.grid_bytes != i2.grid_bytes ||
               i1.ncomp != i2.ncomp || i2.method != POTSYNTH_METHOD_FAST, "io: %s parameters of the model", desc);
 

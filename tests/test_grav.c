@@ -4,7 +4,7 @@
  * Gravity front-end: ICGEM .gfc reader (valid and malformed files,
  * unnormalized coefficients, truncation), analytic fields (point mass, J2),
  * consistency of acceleration and potential, fast against direct method with
- * channels of very different size
+ * functionals of very different size
  */
 
 #define TEST_GFC_FILE                "test_gfc_tmp.gfc"
@@ -290,7 +290,7 @@ test_grav_coef(const size_t lmax)
 /*
 test_grav_model()
   Acceleration against finite differences of the potential, and fast method
-against direct method channel by channel
+against direct method functional by functional
 */
 
 static void

@@ -9,12 +9,12 @@
  *   points including both poles at several longitudes
  * - against finite differences of the gradient (covariant-derivative formulas)
  * - continuity at the poles, isotropy of a zonal field on the axis
- * - terms processed in groups (more channels than one vector kernel holds)
- * - fast method against direct method, channel by channel, at several
- *   accuracies, alone and mixed with the gradient channels
+ * - terms processed in groups (more functionals than one vector kernel holds)
+ * - fast method against direct method, functional by functional, at several
+ *   accuracies, alone and mixed with the gradient functionals
  *
  * The tensor of V = sum (a/r)^(l+1) Pbar_l^m [C cos + S sin] is built from
- * five channels, with factors u^(l+3)/a^2:
+ * five functionals, with factors u^(l+3)/a^2:
  *
  * T_rr = (l+1)(l+2) P, T_rt = -(l+2) dP, T_rp = -(l+2) Psin d/dphi,
  * D = T_tt - T_pp = S2A, T_tp = S2B d/dphi,
@@ -26,8 +26,8 @@
 
 /*
 test_hess_alloc()
-  Allocate a model with the five tensor channels, optionally followed by the
-three gradient channels g = grad V (g_r, g_theta, g_phi)
+  Allocate a model with the five tensor functionals, optionally followed by the
+three gradient functionals g = grad V (g_r, g_theta, g_phi)
 */
 
 static potsynth_workspace *
@@ -41,9 +41,9 @@ test_hess_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const d
                       POTSYNTH_THETA_P, POTSYNTH_THETA_DP, POTSYNTH_THETA_PSIN };
   const int dphi[] = { 0, 0, 1, 0, 1, 0, 0, 1 };
   const int rpow[] = { 3, 3, 3, 3, 3, 2, 2, 2 };
-  const size_t nchan = with_grad ? 8 : 5;
+  const size_t nfunc = with_grad ? 8 : 5;
   double * rfac = malloc(8 * L1 * sizeof(double));
-  potsynth_channel chan[8];
+  potsynth_functional func[8];
   potsynth_workspace * w;
   size_t c, l;
 
@@ -61,15 +61,15 @@ test_hess_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const d
       rfac[7 * L1 + l] = 1.0 / a;
     }
 
-  for (c = 0; c < nchan; ++c)
+  for (c = 0; c < nfunc; ++c)
     {
-      chan[c].rpow = rpow[c];
-      chan[c].rfac = rfac + c * L1;
-      chan[c].theta = ops[c];
-      chan[c].dphi = dphi[c];
+      func[c].rpow = rpow[c];
+      func[c].rfac = rfac + c * L1;
+      func[c].theta = ops[c];
+      func[c].dphi = dphi[c];
     }
 
-  w = potsynth_alloc(lmin, lmax, mmax, coef, a, rmin, rmax, nchan, chan, params);
+  w = potsynth_alloc(lmin, lmax, mmax, coef, a, rmin, rmax, nfunc, func, params);
   free(rfac);
 
   return w;
@@ -77,7 +77,7 @@ test_hess_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const d
 
 /*
 test_hess_tensor()
-  Convert the five channels F[c*n + i] to the six components
+  Convert the five functionals F[c*n + i] to the six components
 T[k*n + i], k = rr, rt, rp, tt, tp, pp
 */
 
@@ -216,7 +216,7 @@ test_hess_fd(void)
 
       potsynth_eval(7, rr, tt, pp, F, ew);
 
-      /* gradient channels 5, 6, 7 */
+      /* gradient functionals 5, 6, 7 */
 #define TEST_HESS_B(c, j) F[(c) * 7 + (j)]
       Br = TEST_HESS_B(5, 0);
       Bt = TEST_HESS_B(6, 0);
@@ -345,7 +345,7 @@ test_hess_poles(void)
   free(coef);
 }
 
-/* terms in groups: 8 channels (11 terms) give the same tensor as 5 (bitwise) */
+/* terms in groups: 8 functionals (11 terms) give the same tensor as 5 (bitwise) */
 static void
 test_hess_groups(void)
 {
@@ -370,7 +370,7 @@ test_hess_groups(void)
   ew8 = potsynth_eval_alloc(0, w8);
   potsynth_eval(n, r, theta, phi, F5, ew5);
   potsynth_eval(n, r, theta, phi, F8, ew8);
-  ps_test(memcmp(F5, F8, 5 * n * sizeof(double)) != 0, "hess: 5 and 8 channels agree (mmax < lmax)");
+  ps_test(memcmp(F5, F8, 5 * n * sizeof(double)) != 0, "hess: 5 and 8 functionals agree (mmax < lmax)");
 
   potsynth_eval_free(ew5);
   potsynth_eval_free(ew8);
@@ -386,9 +386,9 @@ test_hess_groups(void)
 
 /*
 test_hess_fast()
-  Fast method against direct method for every channel, relative to the
-maximum of each channel, with the tensor alone and mixed with the gradient
-(8 channels of different operators and sizes); the points include both
+  Fast method against direct method for every functional, relative to the
+maximum of each functional, with the tensor alone and mixed with the gradient
+(8 functionals of different operators and sizes); the points include both
 poles at several longitudes
 */
 
@@ -434,7 +434,7 @@ test_hess_fast(void)
 
       for (ig = 0; ig < 2; ++ig)
         {
-          const size_t nchan = (ig == 0) ? 5 : 8;
+          const size_t nfunc = (ig == 0) ? 5 : 8;
 
           for (ie = 0; ie < 3; ++ie)
             {
@@ -445,14 +445,14 @@ test_hess_fast(void)
               params.method = POTSYNTH_METHOD_FAST;
               params.eps = eps[ie];
               wf = test_hess_alloc(1, L, L, coef, a, rmin, rmax, (int) ig, &params);
-              ps_test(wf == NULL, "hess: fast allocation L=%zu nchan=%zu eps=%.0e", L, nchan, eps[ie]);
+              ps_test(wf == NULL, "hess: fast allocation L=%zu nfunc=%zu eps=%.0e", L, nfunc, eps[ie]);
               if (wf == NULL)
                 continue;
 
               ewf = potsynth_eval_alloc(0, wf);
               potsynth_eval(n, r, theta, phi, F, ewf);
 
-              for (c = 0; c < nchan; ++c)
+              for (c = 0; c < nfunc; ++c)
                 {
                   double emax = 0.0, vmax = 0.0, epole = 0.0;
 
@@ -467,8 +467,8 @@ test_hess_fast(void)
                     }
 
                   ps_test(emax / vmax > tol[ie] || epole / vmax > tol[ie],
-                          "hess: fast vs direct L=%zu nchan=%zu eps=%.0e %s (error %.2e, poles %.2e)",
-                          L, nchan, eps[ie], names[c], emax / vmax, epole / vmax);
+                          "hess: fast vs direct L=%zu nfunc=%zu eps=%.0e %s (error %.2e, poles %.2e)",
+                          L, nfunc, eps[ie], names[c], emax / vmax, epole / vmax);
                 }
 
               potsynth_eval_free(ewf);

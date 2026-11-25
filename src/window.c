@@ -60,7 +60,7 @@ potsynth_window_choose(const double eps, const double sigma)
 /*
 potsynth_window_choose_shell()
   Window width for a given model and shell: the smallest width, at least that of
-potsynth_window_choose(), at which the estimated window error of every quantity
+potsynth_window_choose(), at which the estimated window error of every component
 is within eps of its largest size in the shell
 
 Inputs: eps    - requested accuracy
@@ -68,10 +68,10 @@ Inputs: eps    - requested accuracy
         L      - maximum SH degree
         nf     - grid points per period (both directions)
         lmin   - minimum SH degree
-        nchan  - number of channels
-        rpow   - radial power offsets, length nchan
+        nfunc  - number of functionals
+        rpow   - radial power offsets, length nfunc
         wn     - weights wn[c*(L+1) + l] (potsynth_radial_weights), the size
-                 of degree l of the quantity of channel c at r = a
+                 of degree l of the component of functional c at r = a
         u0, u1 - a / rmax, a / rmin
 
 Return: window width w
@@ -82,21 +82,21 @@ error E(k) = sum_{j != 0} |phi_hat(k + j nf)| / phi_hat(k), nearly flat over
 most of the band and rising steeply near the band edge |k| = L (by ~30 at
 sigma = 2). The table of potsynth_window_choose() was measured for the
 magnetic field at satellite altitude, whose power lies well inside the band.
-A quantity with most of its power at the highest degrees (the horizontal
+A component with most of its power at the highest degrees (the horizontal
 gravity gradients), or a shell reaching inside r = a (u > 1, where the highest
 degrees grow as u^l), sees more of the band-edge error.
 2) A degree-l harmonic has torus modes |k| <= l and |m| <= l, so its relative
 error is at most Ebar(l) = max_{k<=l} E(k) + max_{m<=l} E(m). The rms over the
-sphere of the error of a quantity at u is then at most
+sphere of the error of a component at u is then at most
 (sum_l wn_l^2 u^(2(l+p)) Ebar(l)^2)^(1/2), against its rms size
 (sum_l wn_l^2 u^(2(l+p)))^(1/2); both are taken at the Chebyshev points of the
-shell, and the ratio of their maxima R is the quantity's window error relative
+shell, and the ratio of their maxima R is the component's window error relative
 to its largest size.
 3) R is a bound: Ebar(l) charges every mode of degree l with the band-edge
 error in both directions. In tests (synthetic gravity model, L = 360 and 720, full
 tensor, shells from r = a and from 21 km inside it; tests/test_window.c) the largest measured error
 at a point was 0.20-0.27 R; WINDOW_PEAK = 0.5 keeps a factor 2 on that. The
-width is raised until WINDOW_PEAK * R <= eps for every quantity, or up to
+width is raised until WINDOW_PEAK * R <= eps for every component, or up to
 POTSYNTH_WMAX. Quantities whose power lies well inside the band, such as the
 magnetic field at satellite altitude for which the table was measured, keep
 the table's width.
@@ -108,7 +108,7 @@ the table's width.
 
 int
 potsynth_window_choose_shell(const double eps, const double sigma, const size_t L, const size_t nf,
-                             const size_t lmin, const size_t nchan, const int * rpow, const double * wn,
+                             const size_t lmin, const size_t nfunc, const int * rpow, const double * wn,
                              const double u0, const double u1)
 {
   const size_t L1 = L + 1;
@@ -152,7 +152,7 @@ potsynth_window_choose_shell(const double eps, const double sigma, const size_t 
           eb[k] = 2.0 * emax;
         }
 
-      for (c = 0; c < nchan; ++c)
+      for (c = 0; c < nfunc; ++c)
         {
           double err = 0.0, size = 0.0;
 

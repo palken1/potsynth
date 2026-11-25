@@ -5,11 +5,11 @@
  *
  * For a block of POTSYNTH_NB points and each order m, a single pass over l runs
  * the column recursion (vectorized across points), applies the running radial
- * factor u^l, and accumulates every channel; no Legendre values are stored.
+ * factor u^l, and accumulates every functional; no Legendre values are stored.
  * P/sin(theta) and dP/dtheta come from the scaled columns and are finite at the
  * poles.
  *
- * Each channel is a sum of terms. A term is the sum over l of one scaled column
+ * Each functional is a sum of terms. A term is the sum over l of one scaled column
  * (Q, E or G = -dQ/dx) with a weight row, multiplied after the sum by a power
  * of sin(theta) (and possibly x = cos(theta)). P, P/sin and dP/dtheta are one
  * term each; the second-derivative operators (see the documentation, "The
@@ -40,7 +40,7 @@ static void direct_order_generic(const size_t nterm, const double * Wm, const si
 
 /*
 potsynth_direct_init()
-  Expand the channels into terms and precompute the weight rows of the direct
+  Expand the functionals into terms and precompute the weight rows of the direct
 method for each order
 
 Inputs: w - workspace
@@ -58,14 +58,14 @@ potsynth_direct_init(potsynth_workspace * w)
 {
   const size_t L = w->lmax;
   const size_t L1 = L + 1;
-  const size_t nchan = w->nchan;
-  /* radial functions of the caller: each (channel, radial function) is summed on
+  const size_t nfunc = w->nfunc;
+  /* radial functions of the caller: each (functional, radial function) is summed on
      its own, with the coefficient sets of the function, and the functions are
-     applied at the points; otherwise one sum per channel */
+     applied at the points; otherwise one sum per functional */
   const size_t nsetr = potsynth_nsetr(w);
   size_t m, l, c, k, p, i, total = 0;
 
-  /* terms: channel-major, then the parts of the channel, the terms of the operator
+  /* terms: functional-major, then the parts of the functional, the terms of the operator
      and the radial functions */
   w->nterm = 0;
   for (p = 0; p < w->npart; ++p)
@@ -74,14 +74,14 @@ potsynth_direct_init(potsynth_workspace * w)
   w->doff = malloc(L1 * sizeof(size_t));
   w->tcol = malloc(w->nterm * sizeof(int));
   w->tpost = malloc(w->nterm * sizeof(int));
-  w->tchan = malloc(w->nterm * sizeof(size_t));
-  if (w->doff == NULL || w->tcol == NULL || w->tpost == NULL || w->tchan == NULL)
+  w->tfunc = malloc(w->nterm * sizeof(size_t));
+  if (w->doff == NULL || w->tcol == NULL || w->tpost == NULL || w->tfunc == NULL)
     {
       POTSYNTH_ERROR ("unable to allocate direct method arrays", POTSYNTH_ENOMEM);
     }
 
   w->needG = 0;
-  for (c = 0, k = 0; c < nchan; ++c)
+  for (c = 0, k = 0; c < nfunc; ++c)
     {
       size_t sub;
 
@@ -92,7 +92,7 @@ potsynth_direct_init(potsynth_workspace * w)
               for (i = 0; i < nsetr; ++i, ++k)
                 {
                   potsynth_op_term(w->ptheta[p], sub, &(w->tcol[k]), &(w->tpost[k]));
-                  w->tchan[k] = c * nsetr + i;
+                  w->tfunc[k] = c * nsetr + i;
                   if (w->tcol[k] == POTSYNTH_COL_G)
                     w->needG = 1;
                 }
@@ -172,8 +172,8 @@ potsynth_direct_free(potsynth_workspace * w)
   if (w->tpost)
     free(w->tpost);
 
-  if (w->tchan)
-    free(w->tchan);
+  if (w->tfunc)
+    free(w->tfunc);
 
   if (w->dW)
     potsynth_aligned_free(w->dW);
@@ -183,7 +183,7 @@ potsynth_direct_free(potsynth_workspace * w)
 size_t
 potsynth_direct_scratch_size(const potsynth_workspace * w)
 {
-  return (2 * w->nterm + w->nchan * potsynth_nsetr(w)) * POTSYNTH_NB + w->nrad;
+  return (2 * w->nterm + w->nfunc * potsynth_nsetr(w)) * POTSYNTH_NB + w->nrad;
 }
 
 #ifdef POTSYNTH_HAVE_VECEXT
@@ -297,7 +297,7 @@ static const direct_order_fn direct_order_vec[2][POTSYNTH_DIRECT_NVEC + 1] =
 
 /*
 potsynth_direct_block()
-  Evaluate all channels at a block of up to POTSYNTH_NB points
+  Evaluate all functionals at a block of up to POTSYNTH_NB points
 
 Inputs: nb      - number of points (<= POTSYNTH_NB)
         r       - radius, length nb
@@ -324,12 +324,12 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
                       const size_t ldo, double * out, double * scratch, const potsynth_workspace * w)
 {
   const size_t L = w->lmax;
-  const size_t nchan = w->nchan;
+  const size_t nfunc = w->nfunc;
   const size_t nterm = w->nterm;
   const potsynth_alf_workspace * alf = w->alf_workspace_p;
   double * restrict acc = scratch;                       /* 2*nterm*NB */
   const size_t nsetr = potsynth_nsetr(w);
-  double * restrict res = acc + 2 * nterm * POTSYNTH_NB; /* nchan*nsetr*NB */
+  double * restrict res = acc + 2 * nterm * POTSYNTH_NB; /* nfunc*nsetr*NB */
   double x[POTSYNTH_NB], s[POTSYNTH_NB], s2[POTSYNTH_NB], u[POTSYNTH_NB], um[POTSYNTH_NB];
   double ph[POTSYNTH_NB], e0[POTSYNTH_NB];
   double c1[POTSYNTH_NB], s1[POTSYNTH_NB], cm[POTSYNTH_NB], sm[POTSYNTH_NB];
@@ -361,7 +361,7 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
       pep[j] = 0;
     }
 
-  memset(res, 0, nchan * nsetr * POTSYNTH_NB * sizeof(double));
+  memset(res, 0, nfunc * nsetr * POTSYNTH_NB * sizeof(double));
 
   for (m = 0; m <= w->mmax; ++m)
     {
@@ -455,7 +455,7 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
           const int post = w->tpost[k];
           const double * aa = acc + 2 * k * POTSYNTH_NB;
           const double * bb = aa + POTSYNTH_NB;
-          double * rr = res + w->tchan[k] * POTSYNTH_NB;
+          double * rr = res + w->tfunc[k] * POTSYNTH_NB;
 
           /* s^(m-2) terms have zero weights for m < 2 */
           if (m < 2 && (post == POTSYNTH_POST_SM2 || post == POTSYNTH_POST_XSM2))
@@ -516,7 +516,7 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
     {
       /* radial functions of the caller at each point (validated before; a later
        * failure of the caller's function gives NaN and an error) */
-      double * f = res + nchan * nsetr * POTSYNTH_NB;
+      double * f = res + nfunc * nsetr * POTSYNTH_NB;
       int status = POTSYNTH_SUCCESS;
 
       for (j = 0; j < nb; ++j)
@@ -525,13 +525,13 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
 
           if (potsynth_radial_eval(w, r[j], &first, &cnt, f) != POTSYNTH_SUCCESS)
             {
-              for (c = 0; c < nchan; ++c)
+              for (c = 0; c < nfunc; ++c)
                 out[c * ldo + j] = NAN;
               status = POTSYNTH_EDOM;
               continue;
             }
 
-          for (c = 0; c < nchan; ++c)
+          for (c = 0; c < nfunc; ++c)
             {
               double sum = 0.0;
 
@@ -545,7 +545,7 @@ potsynth_direct_block(const size_t nb, const double * r, const double * theta, c
       return status;
     }
 
-  for (c = 0; c < nchan; ++c)
+  for (c = 0; c < nfunc; ++c)
     {
       const int rp = w->rpow[c];
 

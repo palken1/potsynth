@@ -1,15 +1,15 @@
 /*
  * test_weights.c
  *
- * Mean squares of the channel operators (the radial weights of the fast
- * method) against numerical integration over the sphere of the channels
+ * Mean squares of the functional operators (the radial weights of the fast
+ * method) against numerical integration over the sphere of the functionals
  * computed by the direct method
  */
 
 /*
 test_op_msq()
   For each operator (theta operator, phi derivative) and each (l, m), integrate
-the square of the channel of one 4-pi normalized harmonic over the sphere
+the square of the functional of one 4-pi normalized harmonic over the sphere
 (Gauss-Legendre in cos(theta), uniform in phi: exact for these trigonometric
 polynomials) and compare with potsynth_op_msq(). Also check that the two
 families have m-independent sums, l(l+1) and (l-1)l(l+1)(l+2)
@@ -25,7 +25,7 @@ test_op_msq(void)
                         POTSYNTH_THETA_PSIN, POTSYNTH_THETA_PSIN, POTSYNTH_THETA_S2A,
                         POTSYNTH_THETA_S2A, POTSYNTH_THETA_S2B, POTSYNTH_THETA_S2B };
   const size_t nlm = potsynth_nlm(0, L, L);
-  potsynth_channel chan[10];
+  potsynth_functional func[10];
   potsynth_parameters params = potsynth_default_parameters();
   double * x = malloc(nt * sizeof(double));
   double * wq = malloc(nt * sizeof(double));
@@ -43,10 +43,10 @@ test_op_msq(void)
 
   for (c = 0; c < 10; ++c)
     {
-      chan[c].rpow = 1;
-      chan[c].rfac = NULL;
-      chan[c].theta = ops[c];
-      chan[c].dphi = (int) (c & 1);
+      func[c].rpow = 1;
+      func[c].rfac = NULL;
+      func[c].theta = ops[c];
+      func[c].dphi = (int) (c & 1);
     }
 
   for (i = 0; i < nt; ++i)
@@ -68,7 +68,7 @@ test_op_msq(void)
           double msq[10];
 
           coef[potsynth_idx(l, m, lmin, L)] = 1.0;
-          w = potsynth_alloc(0, L, L, coef, 1.0, 0.0, 0.0, 10, chan, &params);
+          w = potsynth_alloc(0, L, L, coef, 1.0, 0.0, 0.0, 10, func, &params);
           ew = potsynth_eval_alloc(1, w);
           potsynth_eval(n, r, theta, phi, out, ew);
           coef[potsynth_idx(l, m, lmin, L)] = 0.0;

@@ -36,7 +36,7 @@
 #endif
 
 #define POTSYNTH_NB                  8      /* nodes/points per vectorized block (one cache line of doubles) */
-#define POTSYNTH_CHAN_ALIGN          4      /* grid channel dimension padded to a multiple of this */
+#define POTSYNTH_CHAN_ALIGN          4      /* grid functional dimension padded to a multiple of this */
 #define POTSYNTH_ALIGN               64     /* memory alignment in bytes */
 #define POTSYNTH_ALF_EXPMAX          960    /* scaled ALF columns stay below 2^EXPMAX */
 #define POTSYNTH_ALF_SCALEMAX        1000   /* largest power-of-2 column scaling (bounds the degree) */
@@ -89,7 +89,7 @@ typedef struct
   size_t ncheb;         /* Chebyshev terms per radial function */
   double * basis;       /* Chebyshev coefficients, basis[i*ncheb + k] */
   double * beta;        /* expansion coefficients, beta[(c*rho + i)*(lmax+1) + l] */
-  double err;           /* bound of the radial error relative to the size of each quantity
+  double err;           /* bound of the radial error relative to the size of each component
                            (radial_direct_check()); -1 if not known */
 } potsynth_radial_workspace;
 
@@ -103,29 +103,29 @@ struct potsynth_workspace
   double rmax;          /* maximum radius of evaluation points (fast method) */
   double th_lo;         /* smallest colatitude of evaluation points (fast method) */
   double th_hi;         /* largest colatitude of evaluation points (fast method) */
-  size_t nchan;         /* number of channels */
+  size_t nfunc;         /* number of functionals */
   potsynth_parameters params;
   int method;           /* method selected (POTSYNTH_METHOD_FAST or _DIRECT) */
   int nthreads;         /* number of threads */
 
-  /* channels: channel c is the sum of its parts pbase[c] .. pbase[c+1]-1, each one
+  /* functionals: functional c is the sum of its parts pbase[c] .. pbase[c+1]-1, each one
    * theta and phi operator applied to one coefficient set (potsynth_alloc(): one
-   * part per channel, set 0) */
-  int * rpow;           /* radial power offsets, length nchan */
-  int * ccomp;          /* component label of each channel, > 0, or 0 (chosen here); length nchan */
-  double * cwt;         /* weight of each channel in its component, or 0 (chosen here); length nchan */
-  size_t ncomp;         /* number of field components (potsynth_quantities()) */
+   * part per functional, set 0) */
+  int * rpow;           /* radial power offsets, length nfunc */
+  int * ccomp;          /* component label of each functional, > 0, or 0 (chosen here); length nfunc */
+  double * cwt;         /* weight of each functional in its component, or 0 (chosen here); length nfunc */
+  size_t ncomp;         /* number of irreducible components (potsynth_components()) */
   size_t npart;         /* number of parts */
-  size_t * pbase;       /* first part of each channel, length nchan+1 */
+  size_t * pbase;       /* first part of each functional, length nfunc+1 */
   size_t * pset;        /* coefficient set of each part, length npart */
   int * ptheta;         /* theta operator of each part, length npart */
   int * pdphi;          /* phi derivatives of each part, length npart */
   double * prfac;       /* per-degree factors of each part (with its constant factor),
                            prfac[p*(lmax+1) + l] */
 
-  /* outputs: linear combinations of the channels at each point (front-ends) */
-  size_t nout;          /* outputs per point (= nchan without a map) */
-  double * omap;        /* output k = sum_c omap[k*nchan + c] channel c, or NULL (outputs = channels) */
+  /* outputs: linear combinations of the functionals at each point (front-ends) */
+  size_t nout;          /* outputs per point (= nfunc without a map) */
+  double * omap;        /* output k = sum_c omap[k*nfunc + c] functional c, or NULL (outputs = functionals) */
 
   /* coefficients of each set, 4-pi normalized, M-major: C[set*nalf + idx(l,m)],
    * S[set*nalf + idx(l,m)] */
@@ -160,17 +160,17 @@ struct potsynth_workspace
   long col_hi;          /* last stored grid column */
   size_t nrows;         /* number of stored rows */
   size_t ncols;         /* number of stored columns */
-  size_t nch;           /* number of grid channels, nchan * rho */
+  size_t nch;           /* number of grid functionals, nfunc * rho */
   size_t nchp;          /* nch padded to POTSYNTH_CHAN_ALIGN */
   double * grid;        /* grid[((row - row_lo)*ncols + (col - col_lo))*nchp + q] */
   potsynth_radial_workspace * radial_workspace_p;
 
-  /* direct method: each channel is a sum of terms, each the sum over l of one
+  /* direct method: each functional is a sum of terms, each the sum over l of one
    * scaled column (Q, E or G) with a weight row, times a power of sin(theta) */
   size_t nterm;         /* number of terms */
   int * tcol;           /* column of each term (POTSYNTH_COL_xxx), length nterm */
   int * tpost;          /* factor applied after the sum (POTSYNTH_POST_xxx), length nterm */
-  size_t * tchan;       /* channel of each term, length nterm */
+  size_t * tfunc;       /* functional of each term, length nterm */
   int needG;            /* 1 if any term uses column G */
   double * dW;          /* weight rows (A, B per term) of order m at dW + doff[m],
                            rows of length lmax-m+1 */
@@ -204,7 +204,7 @@ struct potsynth_eval_workspace
   double * tscratch;    /* per-thread scratch space, nthreads * tstride */
   size_t tstride;       /* doubles of scratch per thread */
   double * rscratch;    /* radial functions of the caller at a point (validation), length nrad, or NULL */
-  double * oscratch;    /* channel values of a point for the output map, nthreads * nchan, or NULL */
+  double * oscratch;    /* functional values of a point for the output map, nthreads * nfunc, or NULL */
 };
 
 /* exponential of semicircle window phi(z) = exp(beta (sqrt(1 - z^2) - 1)) */
@@ -223,16 +223,16 @@ potsynth_alf_idx(const size_t l, const size_t m, const size_t lmax)
 }
 
 /*
- * grid layer of channel c and radial function i of rho. Powers of a/r: the
- * radial functions of a channel are next to each other. Radial functions of the
- * caller: the channels of a radial function are next to each other, so that the
+ * grid layer of functional c and radial function i of rho. Powers of a/r: the
+ * radial functions of a functional are next to each other. Radial functions of the
+ * caller: the functionals of a radial function are next to each other, so that the
  * window sum of a point covers only the layers of the functions that are
  * nonzero there
  */
 static inline size_t
 potsynth_layer(const potsynth_workspace * w, const size_t c, const size_t i, const size_t rho)
 {
-  return (w->nrad > 0) ? i * w->nchan + c : c * rho + i;
+  return (w->nrad > 0) ? i * w->nfunc + c : c * rho + i;
 }
 
 /* number of coefficient sets of a part: one for each radial function of the caller */
@@ -280,19 +280,19 @@ int potsynth_fast_init(potsynth_workspace * w);
 double potsynth_fast_check(potsynth_workspace * w);
 double potsynth_op_msq(const int op, const int dphi, const size_t l, const size_t m);
 int potsynth_op_family(const int op, const int dphi);
-int potsynth_chan_family(const potsynth_workspace * w, const size_t c);
-double potsynth_chan_weight(const potsynth_workspace * w, const size_t c);
-size_t potsynth_quantities(const potsynth_workspace * w, size_t * grp);
+int potsynth_func_family(const potsynth_workspace * w, const size_t c);
+double potsynth_func_weight(const potsynth_workspace * w, const size_t c);
+size_t potsynth_components(const potsynth_workspace * w, size_t * grp);
 int potsynth_radial_weights(const potsynth_workspace * w, const int normalize, double * wn);
 double potsynth_radial_tol(const potsynth_parameters * params);
 
 /* radial.c */
 potsynth_radial_workspace * potsynth_radial_alloc(const double u0, const double u1,
                                                   const size_t lmin, const size_t lmax,
-                                                  const size_t nchan, const int * rpow,
+                                                  const size_t nfunc, const int * rpow,
                                                   const double * wn, const double tol);
 potsynth_radial_workspace * potsynth_radial_alloc_caller(const size_t nrad, const size_t lmax,
-                                                         const size_t nchan);
+                                                         const size_t nfunc);
 void potsynth_radial_free(potsynth_radial_workspace * w);
 int potsynth_svd_jacobi(const size_t n, const size_t p, double * X, double * V, double * sv);
 
@@ -307,8 +307,8 @@ size_t potsynth_term_factors(const potsynth_workspace * w, const size_t p, const
                              const size_t m, const double * beta, double * f);
 int potsynth_radial_eval(const potsynth_workspace * w, const double r, size_t * first, size_t * n, double * f);
 int potsynth_set_outputs(potsynth_workspace * w, const size_t nout, const double * map);
-void potsynth_tensor_channels(const size_t lmax, const double f, potsynth_channel * chan, double * rfac);
-void potsynth_tensor_map(const size_t nchan, const size_t c0, double * map);
+void potsynth_tensor_functionals(const size_t lmax, const double f, potsynth_functional * func, double * rfac);
+void potsynth_tensor_map(const size_t nfunc, const size_t c0, double * map);
 
 /* util.c */
 void * potsynth_aligned_alloc(const size_t nbytes);
@@ -322,7 +322,7 @@ void potsynth_sincos_m(const size_t m, const double phi, double * c, double * s)
 /* window.c */
 int potsynth_window_choose(const double eps, const double sigma);
 int potsynth_window_choose_shell(const double eps, const double sigma, const size_t L, const size_t nf,
-                                 const size_t lmin, const size_t nchan, const int * rpow, const double * wn,
+                                 const size_t lmin, const size_t nfunc, const int * rpow, const double * wn,
                                  const double u0, const double u1);
 void potsynth_gauss_legendre(const size_t n, double * x, double * w);
 int potsynth_window_ft(const size_t nk, const int w, const double beta, const double h, double * out);

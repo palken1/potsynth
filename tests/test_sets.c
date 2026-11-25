@@ -27,14 +27,14 @@ test_sets_coef(const size_t nset, const size_t lmin, const size_t lmax, const si
 /* outputs of a single-set model with the direct method, out[c*n + i] */
 static void
 test_sets_single(const size_t lmin, const size_t lmax, const size_t mmax, const double * coef,
-                 const double a, const size_t nchan, const potsynth_channel * chan,
+                 const double a, const size_t nfunc, const potsynth_functional * func,
                  const size_t n, const double * r, const double * theta, const double * phi, double * out)
 {
   potsynth_parameters params = potsynth_default_parameters();
   potsynth_workspace * w;
 
   params.method = POTSYNTH_METHOD_DIRECT;
-  w = potsynth_alloc(lmin, lmax, mmax, coef, a, 0.0, 0.0, nchan, chan, &params);
+  w = potsynth_alloc(lmin, lmax, mmax, coef, a, 0.0, 0.0, nfunc, func, &params);
 
   if (w)
     {
@@ -83,9 +83,9 @@ test_sets_vector(const char * desc, const size_t lmin, const size_t lmax, const 
   potsynth_term t1[2] = { { 1, 1.0, NULL, POTSYNTH_THETA_DP, 0 }, { 2, f, NULL, POTSYNTH_THETA_PSIN, 1 } };
   potsynth_term t2[2] = { { 1, 1.0, NULL, POTSYNTH_THETA_PSIN, 1 }, { 2, g, rf, POTSYNTH_THETA_DP, 0 } };
   potsynth_output o[3] = { { 2, 1, t0, 0, 0.0 }, { 1, 2, t1, 0, 0.0 }, { 1, 2, t2, 0, 0.0 } };
-  potsynth_channel ch_r[1] = { { 2, NULL, POTSYNTH_THETA_P, 0 } };
-  potsynth_channel ch_h[2] = { { 1, NULL, POTSYNTH_THETA_DP, 0 }, { 1, NULL, POTSYNTH_THETA_PSIN, 1 } };
-  potsynth_channel ch_g[1] = { { 1, grf, POTSYNTH_THETA_DP, 0 } };
+  potsynth_functional ch_r[1] = { { 2, NULL, POTSYNTH_THETA_P, 0 } };
+  potsynth_functional ch_h[2] = { { 1, NULL, POTSYNTH_THETA_DP, 0 }, { 1, NULL, POTSYNTH_THETA_PSIN, 1 } };
+  potsynth_functional ch_g[1] = { { 1, grf, POTSYNTH_THETA_DP, 0 } };
   potsynth_parameters params = potsynth_default_parameters();
   double mx[3] = { 0.0, 0.0, 0.0 };
   size_t i, c, e;
@@ -132,7 +132,7 @@ test_sets_vector(const char * desc, const size_t lmin, const size_t lmax, const 
           potsynth_info info;
 
           potsynth_get_info(&info, w);
-          ps_test(info.nout != 3 || info.nchan != 3, "sets: %s number of outputs", desc);
+          ps_test(info.nout != 3 || info.nfunc != 3, "sets: %s number of outputs", desc);
           ps_test_int(potsynth_eval(n, r, theta, phi, out, ew), POTSYNTH_SUCCESS, "sets: %s %s evaluation",
                       desc, fast ? "fast" : "direct");
 
@@ -186,7 +186,7 @@ test_sets_same_op(void)
   potsynth_term ta[2] = { { 0, 2.0, NULL, POTSYNTH_THETA_S2A, 0 }, { 1, -3.0, NULL, POTSYNTH_THETA_S2A, 0 } };
   potsynth_term tb[2] = { { 0, 2.0, NULL, POTSYNTH_THETA_S2B, 1 }, { 1, -3.0, NULL, POTSYNTH_THETA_S2B, 1 } };
   potsynth_output o[3] = { { 1, 2, tp, 0, 0.0 }, { 3, 2, ta, 0, 0.0 }, { 3, 2, tb, 0, 0.0 } };
-  potsynth_channel ch[3] = { { 1, NULL, POTSYNTH_THETA_P, 0 }, { 3, NULL, POTSYNTH_THETA_S2A, 0 },
+  potsynth_functional ch[3] = { { 1, NULL, POTSYNTH_THETA_P, 0 }, { 3, NULL, POTSYNTH_THETA_S2A, 0 },
                              { 3, NULL, POTSYNTH_THETA_S2B, 1 } };
   potsynth_parameters params = potsynth_default_parameters();
   size_t i, c;
@@ -262,7 +262,7 @@ test_sets_wrapper(void)
   double * phi = malloc(n * sizeof(double));
   double * o1 = malloc(3 * n * sizeof(double));
   double * o2 = malloc(3 * n * sizeof(double));
-  potsynth_channel ch[3] = { { 2, NULL, POTSYNTH_THETA_P, 0 }, { 2, NULL, POTSYNTH_THETA_DP, 0 },
+  potsynth_functional ch[3] = { { 2, NULL, POTSYNTH_THETA_P, 0 }, { 2, NULL, POTSYNTH_THETA_DP, 0 },
                              { 2, NULL, POTSYNTH_THETA_PSIN, 1 } };
   potsynth_term t[3] = { { 0, 1.0, NULL, POTSYNTH_THETA_P, 0 }, { 0, 1.0, NULL, POTSYNTH_THETA_DP, 0 },
                          { 0, 1.0, NULL, POTSYNTH_THETA_PSIN, 1 } };
@@ -329,7 +329,7 @@ test_sets_wrapper(void)
 
     if (w)
       {
-        const size_t ngrp = potsynth_quantities(w, grp);
+        const size_t ngrp = potsynth_components(w, grp);
         size_t nbad = 0;
 
         for (i = 0; i < 6; ++i)
@@ -517,7 +517,7 @@ test_sets_components(void)
   potsynth_term tt[2] = { { 0, 1.0, NULL, POTSYNTH_THETA_S2B, 1 }, { 1, 1.0, NULL, POTSYNTH_THETA_S2A, 0 } };
   potsynth_term ts[1] = { { 0, 1.0, NULL, POTSYNTH_THETA_P, 0 } };
   potsynth_output o[4] = { { 3, 2, td, 7, 1.0 }, { 3, 2, tt, 7, 2.0 }, { 3, 1, ts, 9, 1.0 }, { 3, 1, ts, 0, 0.0 } };
-  potsynth_channel ch[2] = { { 3, NULL, POTSYNTH_THETA_S2A, 0 }, { 3, NULL, POTSYNTH_THETA_S2B, 1 } };
+  potsynth_functional ch[2] = { { 3, NULL, POTSYNTH_THETA_S2A, 0 }, { 3, NULL, POTSYNTH_THETA_S2B, 1 } };
   potsynth_parameters params = potsynth_default_parameters();
   potsynth_workspace * w;
   int method;
@@ -547,7 +547,7 @@ test_sets_components(void)
           size_t grp[4];
 
           potsynth_get_info(&info, w);
-          potsynth_quantities(w, grp);
+          potsynth_components(w, grp);
           ps_test(info.ncomp != 3 || grp[0] != grp[1] || grp[2] == grp[0] || grp[3] == grp[2],
                   "components: three components (%zu)", info.ncomp);
 

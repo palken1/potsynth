@@ -8,7 +8,7 @@
 /* outputs of a single-set model on the unit sphere with the direct method, out[c*n + i] */
 static void
 test_vsh_single(const size_t lmin, const size_t lmax, const size_t mmax, const double * coef,
-                const size_t nchan, const potsynth_channel * chan,
+                const size_t nfunc, const potsynth_functional * func,
                 const size_t n, const double * theta, const double * phi, double * out)
 {
   double * ones = malloc(n * sizeof(double));
@@ -17,7 +17,7 @@ test_vsh_single(const size_t lmin, const size_t lmax, const size_t mmax, const d
   for (i = 0; i < n; ++i)
     ones[i] = 1.0;
 
-  test_sets_single(lmin, lmax, mmax, coef, 1.0, nchan, chan, n, ones, theta, phi, out);
+  test_sets_single(lmin, lmax, mmax, coef, 1.0, nfunc, func, n, ones, theta, phi, out);
   free(ones);
 }
 
@@ -75,9 +75,9 @@ test_vsh_field(const char * desc, const size_t lmin, const size_t lmax, const si
   double * out = malloc(nexp * nq * n * sizeof(double));
   double * tmp = malloc(2 * n * sizeof(double));
   double * rl = malloc((lmax + 1) * sizeof(double));
-  potsynth_channel ch_p[1] = { { 0, NULL, POTSYNTH_THETA_P, 0 } };
-  potsynth_channel ch_h[2] = { { 0, NULL, POTSYNTH_THETA_DP, 0 }, { 0, NULL, POTSYNTH_THETA_PSIN, 1 } };
-  potsynth_channel ch_l[1] = { { 0, rl, POTSYNTH_THETA_P, 0 } };
+  potsynth_functional ch_p[1] = { { 0, NULL, POTSYNTH_THETA_P, 0 } };
+  potsynth_functional ch_h[2] = { { 0, NULL, POTSYNTH_THETA_DP, 0 }, { 0, NULL, POTSYNTH_THETA_PSIN, 1 } };
+  potsynth_functional ch_l[1] = { { 0, rl, POTSYNTH_THETA_P, 0 } };
   potsynth_parameters params = potsynth_default_parameters();
   potsynth_workspace * w;
   size_t e, i, q, s;
@@ -203,7 +203,7 @@ test_vsh_signs(void)
   double * sb = malloc(5 * n * sizeof(double));
   double * sc = malloc(5 * n * sizeof(double));
   double * out = malloc(5 * 5 * n * sizeof(double));
-  potsynth_channel ch_p[1] = { { 0, NULL, POTSYNTH_THETA_P, 0 } };
+  potsynth_functional ch_p[1] = { { 0, NULL, POTSYNTH_THETA_P, 0 } };
   potsynth_parameters params = potsynth_default_parameters();
   potsynth_workspace * w;
   double e[4] = { 0.0, 0.0, 0.0, 0.0 }, mx[4] = { 0.0, 0.0, 0.0, 0.0 };

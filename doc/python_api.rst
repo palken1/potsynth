@@ -78,7 +78,7 @@ Magnetic models
 
       A dictionary of the parameters chosen during set-up: ``method``, ``w``,
       ``sigma``, ``rho``, ``ncheb``, ``nf1``, ``nf2``, ``nrows``, ``grid_bytes``,
-      ``lmin``, ``lmax``, ``mmax``, ``nchan`` and ``nout``.
+      ``lmin``, ``lmax``, ``mmax``, ``nfunc`` and ``nout``.
 
    .. py:classmethod:: from_shc(filename, a=6371.2, rmin=0.0, rmax=0.0, **kwargs)
 
@@ -135,7 +135,7 @@ Gravity models
       Required by the fast method; ignored by the direct method.
    :param float rmax: largest radius (m), as for ``rmin``
 
-   :param options: see :ref:`python-options`; ``eps`` applies to each quantity
+   :param options: see :ref:`python-options`; ``eps`` applies to each irreducible component
       separately
 
    .. py:method:: __call__(r, theta, phi)
@@ -251,9 +251,9 @@ These functions convert them; all accept arrays of any broadcastable shapes.
 Generic models
 ==============
 
-.. py:class:: Channel(rpow, theta="P", dphi=0, rfac=None)
+.. py:class:: Functional(rpow, theta="P", dphi=0, rfac=None)
 
-   One output quantity of a generic model, as in :eq:`channel`.
+   One functional of a generic model, as in :eq:`functional`.
 
    :param int rpow: radial power offset :math:`p`; the term carries
       :math:`(a/r)^{l+p}`
@@ -265,24 +265,24 @@ Generic models
    :param rfac: per-degree factors :math:`\rho(l)`, length :math:`L+1`, or ``None``
       for 1
 
-.. py:class:: Model(coef, lmin, lmax, channels, a, rmin=0.0, rmax=0.0, mmax=None, **options)
+.. py:class:: Model(coef, lmin, lmax, functionals, a, rmin=0.0, rmax=0.0, mmax=None, **options)
 
-   A model with user-defined channels. ``coef`` holds the 4-:math:`\pi` fully
+   A model with user-defined functionals. ``coef`` holds the 4-:math:`\pi` fully
    normalized coefficients as a vector (see :py:func:`coef_vector`), and ``lmin``
    may be 0. ``a``, ``rmin`` and ``rmax`` are as for :py:class:`MagModel`, in the
    unit of the radii; the options are described in :ref:`python-options`.
 
    Calling the model with ``(r, theta, phi)`` returns an array of shape
-   ``(len(channels),) + shape``. :py:attr:`MagModel.info` is also available.
+   ``(len(functionals),) + shape``. :py:attr:`MagModel.info` is also available.
 
    Example: a potential :math:`V/a` and its radial derivative:
 
    .. code-block:: python
 
       l = np.arange(L + 1)
-      chans = [potsynth.Channel(rpow=1),                        # sum (a/r)^(l+1) ...
-               potsynth.Channel(rpow=2, rfac=l + 1.0)]          # -dV/dr
-      model = potsynth.Model(coef, 0, L, chans, a, rmin, rmax)
+      funcs = [potsynth.Functional(rpow=1),                        # sum (a/r)^(l+1) ...
+               potsynth.Functional(rpow=2, rfac=l + 1.0)]          # -dV/dr
+      model = potsynth.Model(coef, 0, L, funcs, a, rmin, rmax)
       V, dV = model(r, theta, phi)
 
 .. py:class:: SetsModel(coef, lmin, lmax, outputs, a=1.0, rmin=None, rmax=None, mmax=None, radial=None, **options)
@@ -316,7 +316,7 @@ Generic models
 
 .. py:class:: Term(set, theta="P", dphi=0, fac=1.0, rfac=None)
 
-   One term: ``fac * rfac[l]`` times the operator ``theta`` (as for :py:class:`Channel`)
+   One term: ``fac * rfac[l]`` times the operator ``theta`` (as for :py:class:`Functional`)
    applied to coefficient set ``set``.
 
    Example: the horizontal components of a vector field

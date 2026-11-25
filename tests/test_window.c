@@ -48,10 +48,10 @@ test_window_shell(void)
   const double rmin_list[] = { a, a - 21.0e3 };   /* from r = a, and from inside it (u > 1) */
   const double eps_list[] = { 1.0e-6, 1.0e-10 };
   const int quantities = POTSYNTH_GRAV_V | POTSYNTH_GRAV_G | POTSYNTH_GRAV_T;
-  const size_t nchan = potsynth_grav_nout(quantities);
+  const size_t nfunc = potsynth_grav_nout(quantities);
   double * coef = calloc(potsynth_nlm(0, L, L), sizeof(double));
   double * r = malloc(n * sizeof(double)), * th = malloc(n * sizeof(double)), * ph = malloc(n * sizeof(double));
-  double * out = malloc(nchan * n * sizeof(double)), * ref = malloc(nchan * n * sizeof(double));
+  double * out = malloc(nfunc * n * sizeof(double)), * ref = malloc(nfunc * n * sizeof(double));
   size_t l, m, i, s, k;
 
   /* Kaula-like spectrum, as in examples/example_grav.c */

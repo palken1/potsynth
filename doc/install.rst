@@ -167,7 +167,7 @@ Tests
       poles, points within :math:`10^{-300}` of a pole, and the shell boundaries.
 
    ``test_eval.c``
-      The fast method against the direct method, for many models and channel sets.
+      The fast method against the direct method, for many models and functional sets.
 
    ``test_sets.c``
       Models with several coefficient sets against sums of single-set models; the row

@@ -6,12 +6,12 @@
  * For each order m (in parallel):
  *
  * 1) Column recursion in l at the coarse colatitude nodes of one quadrant,
- *    theta_j in (0, pi/2), fused with the sums over l of every channel, split by
+ *    theta_j in (0, pi/2), fused with the sums over l of every functional, split by
  *    the parity of l - m (potsynth_alf_accum). The other three quadrants of the
  *    doubled sphere follow from parity and sign rules, so the recursion runs on a
  *    quarter of the nodes.
  *
- * 2) Exact Fourier coefficients in theta by one FFT of length Nt per channel.
+ * 2) Exact Fourier coefficients in theta by one FFT of length Nt per functional.
  *
  * 3) Pre-sharpening (division by the window transform), zero padding, and an
  *    inverse FFT to the fine theta grid.
@@ -19,9 +19,9 @@
  * 4) The values of the stored rows are written into the grid in half-complex
  *    order along phi.
  *
- * Channels are expanded into terms as in the direct method (column Q, E or
+ * Functionals are expanded into terms as in the direct method (column Q, E or
  * G with a weight row and a power of sin(theta)); the sums of the terms of a
- * channel are combined at each node before step 2. The second-derivative
+ * functional are combined at each node before step 2. The second-derivative
  * operators S2A (like P) and S2B (like dP/dtheta) keep the parity and sign
  * rules of a single operator, so the quadrant symmetries apply unchanged.
  *
@@ -40,7 +40,7 @@
 #include "potsynth_internal.h"
 #include "pocketfft.h"
 
-#define FAST_ROWBLK 8 /* channels transformed together in the phi pass (fast_row()) */
+#define FAST_ROWBLK 8 /* functionals transformed together in the phi pass (fast_row()) */
 
 /* per-thread buffers */
 typedef struct
@@ -72,12 +72,12 @@ typedef struct
   double * c1;          /* pre-sharpening factors in theta, length lmax+1 */
   double * c2;          /* pre-sharpening factors in phi, length lmax+1 */
   double * shift;       /* e^{-i p pi/Nt}/Nt, p = -lmax..lmax (complex) */
-  size_t nterm;         /* term pairs: (channel c, term t, radial function i) */
-  size_t * tbase;       /* first term pair of channel c is tbase[c] + i; term t at + t*rho */
+  size_t nterm;         /* term pairs: (functional c, term t, radial function i) */
+  size_t * tbase;       /* first term pair of functional c is tbase[c] + i; term t at + t*rho */
   int * tcol;           /* column of each term pair (POTSYNTH_COL_xxx) */
   int * tpost;          /* factor after the sum (POTSYNTH_POST_xxx) */
-  size_t * tsub;        /* term number within the channel */
-  size_t * tchan;       /* channel of each term pair */
+  size_t * tsub;        /* term number within the functional */
+  size_t * tfunc;       /* functional of each term pair */
   size_t * tpart;       /* part (operator and coefficient set) of each term pair */
   int needG;            /* 1 if any term uses column G */
   cfft_plan pt;         /* FFT of length Nt */
@@ -92,7 +92,7 @@ static void fast_state_free(fast_state_t * state);
 static int fast_order(const size_t m, const fast_state_t * state, fast_thread * thread,
                       potsynth_workspace * w);
 static int fast_row(const size_t row, double * R, const fast_state_t * state, potsynth_workspace * w);
-static int chan_same_sets(const potsynth_workspace * w, const size_t c, const size_t c2);
+static int func_same_sets(const potsynth_workspace * w, const size_t c, const size_t c2);
 static size_t check_select(const potsynth_workspace * w, const size_t * grp, const size_t ngrp, size_t * sel);
 static int check_direct(const potsynth_workspace * w, const size_t nsel, const size_t * sel, const size_t n,
                         const double * r, const double * th, const double * ph, double * out);
@@ -102,7 +102,7 @@ static long floor_mod(const long a, const long n);
 potsynth_fast_init()
   Construct the radial basis and the grid of the fast method
 
-Inputs: w - workspace, with coefficients and channels set
+Inputs: w - workspace, with coefficients and functionals set
 
 Return: success or error
 */
@@ -131,7 +131,7 @@ potsynth_fast_init(potsynth_workspace * w)
   w->half = 0.5 * w->w;
 
   /* step 1: radial basis */
-  wn = malloc(w->nchan * L1 * sizeof(double));
+  wn = malloc(w->nfunc * L1 * sizeof(double));
   if (wn == NULL)
     {
       POTSYNTH_ERROR ("unable to allocate radial weights", POTSYNTH_ENOMEM);
@@ -146,7 +146,7 @@ potsynth_fast_init(potsynth_workspace * w)
 
   tol = potsynth_radial_tol(&(w->params));
 
-  /* window width: widen it where a quantity has more of its power near the band
+  /* window width: widen it where a component has more of its power near the band
      edge than the table assumes, or the shell reaches inside r = a
      (potsynth_window_choose_shell) */
   if (w->params.w <= 0)
@@ -155,7 +155,7 @@ potsynth_fast_init(potsynth_workspace * w)
       const size_t nf = potsynth_next_smooth((nmin > 2 * (size_t) w->w) ? nmin : 2 * (size_t) w->w, 2);
 
       /* radial functions of the caller: no powers of a/r (u = 1) */
-      w->w = potsynth_window_choose_shell(w->params.eps, w->sigma, L, nf, w->lmin, w->nchan, w->rpow,
+      w->w = potsynth_window_choose_shell(w->params.eps, w->sigma, L, nf, w->lmin, w->nfunc, w->rpow,
                                           wn, (w->nrad > 0) ? 1.0 : w->a / w->rmax,
                                           (w->nrad > 0) ? 1.0 : w->a / w->rmin);
       w->beta = M_PI * (1.0 - 1.0 / (2.0 * w->sigma)) * w->w;
@@ -167,10 +167,10 @@ potsynth_fast_init(potsynth_workspace * w)
   if (w->radial_workspace_p == NULL)
     {
       if (w->nrad > 0)
-        w->radial_workspace_p = potsynth_radial_alloc_caller(w->nrad, L, w->nchan);
+        w->radial_workspace_p = potsynth_radial_alloc_caller(w->nrad, L, w->nfunc);
       else
         w->radial_workspace_p = potsynth_radial_alloc(w->a / w->rmax, w->a / w->rmin, w->lmin, L,
-                                                      w->nchan, w->rpow, wn, tol);
+                                                      w->nfunc, w->rpow, wn, tol);
     }
   free(wn);
   if (w->radial_workspace_p == NULL)
@@ -198,7 +198,7 @@ potsynth_fast_init(potsynth_workspace * w)
 
   w->nrows = (size_t) (w->row_hi - w->row_lo + 1);
   w->ncols = (size_t) (w->col_hi - w->col_lo + 1);
-  w->nch = w->nchan * w->radial_workspace_p->rho;
+  w->nch = w->nfunc * w->radial_workspace_p->rho;
   w->nchp = (w->nch + POTSYNTH_CHAN_ALIGN - 1) / POTSYNTH_CHAN_ALIGN * POTSYNTH_CHAN_ALIGN;
 
   if ((double) w->nrows * w->ncols * w->nchp * sizeof(double) > (double) SIZE_MAX / 2)
@@ -207,8 +207,8 @@ potsynth_fast_init(potsynth_workspace * w)
     }
 
   /* not zeroed here (a serial pass over the whole grid): the orders write the Fourier
-   * slots 0..2 mmax of every row and channel, and fast_row() supplies the zeros of the
-   * slots above them and of the padding channels */
+   * slots 0..2 mmax of every row and functional, and fast_row() supplies the zeros of the
+   * slots above them and of the padding functionals */
   w->grid = potsynth_aligned_alloc(w->nrows * w->ncols * w->nchp * sizeof(double));
   if (w->grid == NULL)
     {
@@ -295,16 +295,16 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
 
   memset(state, 0, sizeof(fast_state_t));
 
-  /* term pairs, channel-major, then term, then radial function */
-  state->tbase = malloc(w->nchan * sizeof(size_t));
+  /* term pairs, functional-major, then term, then radial function */
+  state->tbase = malloc(w->nfunc * sizeof(size_t));
   if (state->tbase == NULL)
     {
       POTSYNTH_ERROR ("unable to allocate set-up data", POTSYNTH_ENOMEM);
     }
 
-  /* the terms of a channel are those of its parts, one after the other */
+  /* the terms of a functional are those of its parts, one after the other */
   state->nterm = 0;
-  for (j = 0; j < w->nchan; ++j)
+  for (j = 0; j < w->nfunc; ++j)
     {
       size_t p;
 
@@ -316,15 +316,15 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
   state->tcol = malloc(state->nterm * sizeof(int));
   state->tpost = malloc(state->nterm * sizeof(int));
   state->tsub = malloc(state->nterm * sizeof(size_t));
-  state->tchan = malloc(state->nterm * sizeof(size_t));
+  state->tfunc = malloc(state->nterm * sizeof(size_t));
   state->tpart = malloc(state->nterm * sizeof(size_t));
-  if (!state->tcol || !state->tpost || !state->tsub || !state->tchan || !state->tpart)
+  if (!state->tcol || !state->tpost || !state->tsub || !state->tfunc || !state->tpart)
     {
       POTSYNTH_ERROR ("unable to allocate set-up data", POTSYNTH_ENOMEM);
     }
 
   state->needG = 0;
-  for (j = 0; j < w->nchan; ++j)
+  for (j = 0; j < w->nfunc; ++j)
     {
       const size_t rho = w->radial_workspace_p->rho;
       size_t p, t, t0 = 0, i2;
@@ -338,7 +338,7 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
 
               potsynth_op_term(w->ptheta[p], t, &(state->tcol[kt]), &(state->tpost[kt]));
               state->tsub[kt] = t;
-              state->tchan[kt] = j;
+              state->tfunc[kt] = j;
               state->tpart[kt] = p;
               if (state->tcol[kt] == POTSYNTH_COL_G)
                 state->needG = 1;
@@ -457,8 +457,8 @@ fast_state_free(fast_state_t * state)
   if (state->tsub)
     free(state->tsub);
 
-  if (state->tchan)
-    free(state->tchan);
+  if (state->tfunc)
+    free(state->tfunc);
 
   if (state->tpart)
     free(state->tpart);
@@ -532,7 +532,7 @@ Inputs: m      - SH order
         w      - workspace
 
 Notes:
-1) Pair k = (c, i) of channel c and radial function i has weight rows
+1) Pair k = (c, i) of functional c and radial function i has weight rows
 A (cos m phi) and B (sin m phi); the angular function is
 G = Re[ (S_A - i S_B) e^{i m phi} ]. Each pair is the sum of its terms (one
 for P, P/sin, dP/dtheta; three for S2A, two for S2B), each accumulated
@@ -551,7 +551,7 @@ Under theta -> pi - theta, Q has the parity (-1)^(l-m) in x, E and G the
 opposite parity, and a factor x changes sign; every term of S2A then
 follows E - O and every term of S2B O - E. Under theta -> 2pi - theta only
 the power of sin(theta) changes sign, and the powers of all terms of a
-channel have the parity of m (S2A, S2B).
+functional have the parity of m (S2A, S2B).
 */
 
 static int
@@ -573,7 +573,7 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
   /* weight rows of each term pair */
   for (k = 0; k < state->nterm; ++k)
     {
-      const size_t c = state->tchan[k];
+      const size_t c = state->tfunc[k];
       const size_t i = (k - state->tbase[c]) % rho;
       const size_t p = state->tpart[k];
       const double * beta = w->radial_workspace_p->beta + (c * rho + i) * L1;
@@ -652,7 +652,7 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
     {
       const size_t c = k / rho;
       const size_t i = k % rho;
-      /* the parts of a channel have the same sign rule under theta -> 2pi - theta
+      /* the parts of a functional have the same sign rule under theta -> 2pi - theta
          (potsynth_alloc_sets()); the rule under theta -> pi - theta is that of each part */
       const int op0 = w->ptheta[w->pbase[c]];
       const int even = (op0 == POTSYNTH_THETA_P || op0 == POTSYNTH_THETA_S2A || op0 == POTSYNTH_THETA_S2B);
@@ -805,18 +805,18 @@ fast_order(const size_t m, const fast_state_t * state, fast_thread * thread, pot
 
 /*
 fast_row()
-  Inverse real FFT along phi of each channel of one stored row, and
+  Inverse real FFT along phi of each functional of one stored row, and
 periodic padding columns
 
 Notes:
 1) The grid is not zeroed at allocation: the Fourier slots above 2 mmax, which no
-order writes, are taken as zero here, and the padding channels nch..nchp-1 are
+order writes, are taken as zero here, and the padding functionals nch..nchp-1 are
 set to zero
-2) The channels of a node are next to each other in the grid, so the channels are
+2) The functionals of a node are next to each other in the grid, so the functionals are
 transformed in blocks of FAST_ROWBLK: a block is copied into contiguous rows of R
 (reading FAST_ROWBLK consecutive values per column), transformed and copied back.
-One channel at a time would read the whole row, which is larger than the caches at
-high degree, once per channel. The transforms are the same, so are the values
+One functional at a time would read the whole row, which is larger than the caches at
+high degree, once per functional. The transforms are the same, so are the values
 
 Inputs: row   - stored row index
         R     - buffer, length FAST_ROWBLK*nf2
@@ -839,7 +839,7 @@ fast_row(const size_t row, double * R, const fast_state_t * state, potsynth_work
       size_t b;
       long col;
 
-      /* gather: column-major in the grid, one contiguous row of R per channel */
+      /* gather: column-major in the grid, one contiguous row of R per functional */
       for (k = 0; k < nf2; ++k)
         {
           const double * gk = g + (size_t) ((long) k - w->col_lo) * nchp + q;
@@ -865,7 +865,7 @@ fast_row(const size_t row, double * R, const fast_state_t * state, potsynth_work
         }
     }
 
-  /* padding channels */
+  /* padding functionals */
   if (nchp > w->nch)
     {
       for (k = 0; k < w->ncols; ++k)
@@ -877,21 +877,21 @@ fast_row(const size_t row, double * R, const fast_state_t * state, potsynth_work
 
 /*
 sets_msq()
-  Mean square over the sphere of the degree-l, order-m part of a quantity at
+  Mean square over the sphere of the degree-l, order-m part of a component at
 r = a, for a model with several coefficient sets
 
 Inputs: w   - workspace
-        g   - quantity
-        grp - quantity of each channel
+        g   - component
+        grp - component of each functional
         l   - degree
         m   - order
         idx - index of (l, m) in a coefficient set
 
 Notes:
-1) In each channel, the parts with the same theta and phi operator are summed
+1) In each functional, the parts with the same theta and phi operator are summed
 with their coefficients before squaring, so that sets which cancel (e.g. the
 difference of two models) give the power of their sum; parts with different
-operators, and different channels, add in power. With radial functions of the
+operators, and different functionals, add in power. With radial functions of the
 caller, each function adds in power.
 */
 
@@ -904,21 +904,21 @@ sets_msq(const potsynth_workspace * w, const size_t g, const size_t * grp, const
   double msq = 0.0;
   size_t c, p, p2, j;
 
-  for (c = 0; c < w->nchan; ++c)
+  for (c = 0; c < w->nfunc; ++c)
     {
       double wt;
 
       if (grp[c] != g)
         continue;
 
-      wt = potsynth_chan_weight(w, c);
+      wt = potsynth_func_weight(w, c);
 
       for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
         {
           double q;
           int first = 1;
 
-          /* the first part of the channel with this operator takes all of them */
+          /* the first part of the functional with this operator takes all of them */
           for (p2 = w->pbase[c]; p2 < p && first; ++p2)
             first = !(w->ptheta[p2] == w->ptheta[p] && w->pdphi[p2] == w->pdphi[p]);
 
@@ -955,20 +955,20 @@ sets_msq(const potsynth_workspace * w, const size_t g, const size_t * grp, const
 
 /*
 potsynth_radial_weights()
-  Weights of the radial basis (step 1). Channels with the same radial power and
-field family (scalar, surface gradient, spin-2 tensor) form one quantity; its
+  Weights of the radial basis (step 1). Functionals with the same radial power and
+field family (scalar, surface gradient, spin-2 tensor) form one irreducible component; its
 weight for degree l is the rms over the sphere of its degree-l part at r = a
 
-Inputs: w         - workspace, with coefficients and channels set
-        normalize - 1: normalize the weights of each quantity over l to unit
+Inputs: w         - workspace, with coefficients and functionals set
+        normalize - 1: normalize the weights of each component over l to unit
                     sum of squares, so that the rank truncation is relative to
-                    the size of each quantity (e.g. potential and acceleration
+                    the size of each component (e.g. potential and acceleration
                     differ by a factor ~a); 0: rms values
-        wn        - (output) weights wn[c*(lmax+1) + l], length nchan*(lmax+1);
-                    all channels of a quantity get the same weights
+        wn        - (output) weights wn[c*(lmax+1) + l], length nfunc*(lmax+1);
+                    all functionals of a component get the same weights
 
 Notes:
-1) The radial basis takes the largest weight over the quantities sharing a
+1) The radial basis takes the largest weight over the components sharing a
 radial power (potsynth_radial_alloc)
 */
 
@@ -977,48 +977,48 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
 {
   const size_t L = w->lmax;
   const size_t L1 = L + 1;
-  const size_t nchan = w->nchan;
+  const size_t nfunc = w->nfunc;
   const size_t nsetr = potsynth_nsetr(w); /* coefficient sets of a part */
-  size_t * grp = malloc(nchan * sizeof(size_t));
+  size_t * grp = malloc(nfunc * sizeof(size_t));
   size_t * plist = malloc(w->npart * sizeof(size_t));
-  size_t * pchan = malloc(w->npart * sizeof(size_t));
+  size_t * pfunc = malloc(w->npart * sizeof(size_t));
   size_t ngrp, g, c, l, m;
 
-  if (grp == NULL || plist == NULL || pchan == NULL)
+  if (grp == NULL || plist == NULL || pfunc == NULL)
     {
       free(grp);
       free(plist);
-      free(pchan);
-      POTSYNTH_ERROR ("unable to allocate quantities", POTSYNTH_ENOMEM);
+      free(pfunc);
+      POTSYNTH_ERROR ("unable to allocate components", POTSYNTH_ENOMEM);
     }
 
-  for (c = 0; c < nchan; ++c)
+  for (c = 0; c < nfunc; ++c)
     {
       size_t p;
 
       for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
-        pchan[p] = c;
+        pfunc[p] = c;
     }
 
-  memset(wn, 0, nchan * L1 * sizeof(double));
+  memset(wn, 0, nfunc * L1 * sizeof(double));
 
-  ngrp = potsynth_quantities(w, grp);
+  ngrp = potsynth_components(w, grp);
 
   for (g = 0; g < ngrp; ++g)
     {
-      size_t c0 = nchan, np = 0, s, i;
+      size_t c0 = nfunc, np = 0, s, i;
       double norm = 0.0;
 
-      /* parts of the channels of the quantity, ordered by coefficient set and
-         within a set by channel and part (insertion sort: the lists are short) */
-      for (c = 0; c < nchan; ++c)
+      /* parts of the functionals of the component, ordered by coefficient set and
+         within a set by functional and part (insertion sort: the lists are short) */
+      for (c = 0; c < nfunc; ++c)
         {
           size_t p;
 
           if (grp[c] != g)
             continue;
 
-          if (c0 == nchan)
+          if (c0 == nfunc)
             c0 = c;
 
           for (p = w->pbase[c]; p < w->pbase[c + 1]; ++p)
@@ -1041,9 +1041,9 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
 
               if (w->nset > nsetr)
                 {
-                  /* several coefficient sets: parts of a channel with the same operator
+                  /* several coefficient sets: parts of a functional with the same operator
                      add coherently (sets that nearly cancel, such as the difference of
-                     two epochs, give a small weight); different operators and channels
+                     two epochs, give a small weight); different operators and functionals
                      add in power */
                   msq += sets_msq(w, g, grp, l, m, idx);
                   continue;
@@ -1077,9 +1077,9 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
                     {
                       const size_t p = plist[s];
                       const double rf = w->prfac[p * L1 + l];
-                      /* weight of the channel in its quantity; spin 2: the quantity is
+                      /* weight of the functional in its component; spin 2: the component is
                          (S2A, 2 S2B), with an m-independent norm */
-                      const double wt = potsynth_chan_weight(w, pchan[p]);
+                      const double wt = potsynth_func_weight(w, pfunc[p]);
 
                       q += wt * wt * rf * rf * potsynth_op_msq(w->ptheta[p], w->pdphi[p], l, m);
                     }
@@ -1099,8 +1099,8 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
             wn[c0 * L1 + l] *= norm;
         }
 
-      /* the other channels of the quantity share its weights */
-      for (c = c0 + 1; c < nchan; ++c)
+      /* the other functionals of the component share its weights */
+      for (c = c0 + 1; c < nfunc; ++c)
         {
           if (grp[c] == g)
             memcpy(wn + c * L1, wn + c0 * L1, L1 * sizeof(double));
@@ -1109,62 +1109,62 @@ potsynth_radial_weights(const potsynth_workspace * w, const int normalize, doubl
 
   free(grp);
   free(plist);
-  free(pchan);
+  free(pfunc);
 
   return POTSYNTH_SUCCESS;
 }
 
 /*
-potsynth_chan_weight()
-  Weight of a channel in the magnitude of its quantity: given by the caller, or
+potsynth_func_weight()
+  Weight of a functional in the magnitude of its component: given by the caller, or
 1, and 2 for the off-diagonal part S2B of a spin-2 tensor (which counts twice)
 */
 
 double
-potsynth_chan_weight(const potsynth_workspace * w, const size_t c)
+potsynth_func_weight(const potsynth_workspace * w, const size_t c)
 {
   if (w->cwt[c] > 0.0)
     return w->cwt[c];
 
-  return (potsynth_chan_family(w, c) == 2 && w->ptheta[w->pbase[c]] == POTSYNTH_THETA_S2B) ? 2.0 : 1.0;
+  return (potsynth_func_family(w, c) == 2 && w->ptheta[w->pbase[c]] == POTSYNTH_THETA_S2B) ? 2.0 : 1.0;
 }
 
 /*
-potsynth_chan_family()
-  Field family of a channel (potsynth_op_family()): that of its parts, which
+potsynth_func_family()
+  Field family of a functional (potsynth_op_family()): that of its parts, which
 all have the same operators or are all of family 1 (potsynth_alloc_sets())
 */
 
 int
-potsynth_chan_family(const potsynth_workspace * w, const size_t c)
+potsynth_func_family(const potsynth_workspace * w, const size_t c)
 {
   const size_t p = w->pbase[c];
   return potsynth_op_family(w->ptheta[p], w->pdphi[p]);
 }
 
 /*
-potsynth_quantities()
-  Quantities (field components) of the channels: channels with the same
-component given by the caller; otherwise channels with the same radial power,
+potsynth_components()
+  Irreducible components of the functionals: functionals with the same
+component given by the caller; otherwise functionals with the same radial power,
 field family (scalar, surface gradient, spin-2 tensor) and coefficient sets
-form one quantity, and a channel without a family is a quantity of its own
+form one component, and a functional without a family is a component of its own
 
-Inputs: w   - workspace, with channels set
-        grp - (output) quantity of each channel, 0..ngrp-1, numbered in the order
-              of their first channels; length nchan
+Inputs: w   - workspace, with functionals set
+        grp - (output) component of each functional, 0..ngrp-1, numbered in the order
+              of their first functionals; length nfunc
 
-Return: number of quantities
+Return: number of components
 */
 
 size_t
-potsynth_quantities(const potsynth_workspace * w, size_t * grp)
+potsynth_components(const potsynth_workspace * w, size_t * grp)
 {
   size_t ngrp = 0;
   size_t c, c2;
 
-  for (c = 0; c < w->nchan; ++c)
+  for (c = 0; c < w->nfunc; ++c)
     {
-      const int fam = potsynth_chan_family(w, c);
+      const int fam = potsynth_func_family(w, c);
 
       grp[c] = ngrp;
 
@@ -1184,8 +1184,8 @@ potsynth_quantities(const potsynth_workspace * w, size_t * grp)
         {
           for (c2 = 0; c2 < c && fam >= 0; ++c2)
             {
-              if (w->ccomp[c2] == 0 && w->rpow[c2] == w->rpow[c] && potsynth_chan_family(w, c2) == fam &&
-                  chan_same_sets(w, c, c2))
+              if (w->ccomp[c2] == 0 && w->rpow[c2] == w->rpow[c] && potsynth_func_family(w, c2) == fam &&
+                  func_same_sets(w, c, c2))
                 {
                   grp[c] = grp[c2];
                   break;
@@ -1200,9 +1200,9 @@ potsynth_quantities(const potsynth_workspace * w, size_t * grp)
   return ngrp;
 }
 
-/* 1 if the parts of the channels c and c2 use the same coefficient sets */
+/* 1 if the parts of the functionals c and c2 use the same coefficient sets */
 static int
-chan_same_sets(const potsynth_workspace * w, const size_t c, const size_t c2)
+func_same_sets(const potsynth_workspace * w, const size_t c, const size_t c2)
 {
   size_t p, q;
 
@@ -1232,7 +1232,7 @@ chan_same_sets(const potsynth_workspace * w, const size_t c, const size_t c2)
 potsynth_radial_tol()
   Relative tolerance of the radial step: rank_tol, or eps/2 by default (the
 other half of the error budget goes to the window), and at least 1e-16. The
-radial basis bounds the maximum of each quantity's radial error over the shell
+radial basis bounds the maximum of each component's radial error over the shell
 by it (see radial_rank_check() in radial.c)
 */
 
@@ -1245,7 +1245,7 @@ potsynth_radial_tol(const potsynth_parameters * params)
 
 /*
 potsynth_op_msq()
-  Mean square over the sphere of a channel operator applied to one
+  Mean square over the sphere of a functional operator applied to one
 4-pi normalized harmonic Pbar_l^m(cos theta) cos(m phi) (or sin(m phi))
 
 Inputs: op   - operator in theta (POTSYNTH_THETA_xxx)
@@ -1291,9 +1291,9 @@ potsynth_op_msq(const int op, const int dphi, const size_t l, const size_t m)
 
 /*
 potsynth_op_family()
-  Field family of a channel operator: 0 = scalar (P), 1 = surface gradient
+  Field family of a functional operator: 0 = scalar (P), 1 = surface gradient
 (dP, Psin d/dphi), 2 = spin-2 horizontal tensor (S2A, S2B d/dphi), -1 = none
-(the channel forms a family of its own)
+(the functional forms a family of its own)
 */
 
 int
@@ -1332,42 +1332,42 @@ Return: worst error ratio; 0 if there is nothing to check; minus the error
 Notes:
 1) The window error is largest where the field has most of its power near the
 band edge, which for a real model is local (mountains, a buried mass). For each
-channel, the CHECK_TOP grid nodes with the largest five-point Laplacian of the
-channel at the bottom of the shell (where the highest degrees are largest) are
+functional, the CHECK_TOP grid nodes with the largest five-point Laplacian of the
+functional at the bottom of the shell (where the highest degrees are largest) are
 taken, and around each the four cell midpoints (half a grid step from the nodes
 in both angles, where the window error of a band-edge mode peaks), at the bottom,
 middle and top of the shell. CHECK_NRAND points uniform in the shell are added
 for the sizes of the components.
 
 2) The candidate scan is split over the threads, each keeping its own
-CHECK_TOP list per channel; the lists are merged afterwards, so the result does
+CHECK_TOP list per functional; the lists are merged afterwards, so the result does
 not depend on the number of threads (ties apart).
 
-3) A component is a set of channels (potsynth_quantities(); eq. 10 of the
+3) An irreducible component is a set of functionals (potsynth_components(); eq. 10 of the
 paper): its error and size at a point are the lengths of the vectors its
-channels form, with the weights of the channels (potsynth_chan_weight()).
+functionals form, with the weights of the functionals (potsynth_func_weight()).
 
 4) A model with more than CHECK_MAXCOMP components (many fields on one grid) is
 checked for the CHECK_MAXCOMP components with the largest share of their power
 in the highest eighth of the degrees, where the window error is largest. A model
-with more than CHECK_BUDGET / CHECK_TOP channels to check gets fewer candidate
-nodes per channel (at least CHECK_TOP_MANY). The direct sum is computed for the channels of
+with more than CHECK_BUDGET / CHECK_TOP functionals to check gets fewer candidate
+nodes per functional (at least CHECK_TOP_MANY). The direct sum is computed for the functionals of
 the checked components only, so that the cost of the check does not grow with
 the number of fields.
 */
 
-#define CHECK_TOP      16   /* candidate nodes per channel */
+#define CHECK_TOP      16   /* candidate nodes per functional */
 #define CHECK_NRAND    256  /* random points */
 #define CHECK_MAXCOMP  64   /* components checked of a model with more components */
-#define CHECK_TOP_MANY 2    /* least candidate nodes per channel */
-#define CHECK_BUDGET   256  /* candidate nodes of all channels, unless that leaves fewer than
-                               CHECK_TOP_MANY per channel */
+#define CHECK_TOP_MANY 2    /* least candidate nodes per functional */
+#define CHECK_BUDGET   256  /* candidate nodes of all functionals, unless that leaves fewer than
+                               CHECK_TOP_MANY per functional */
 #define CHECK_CHUNK    256  /* points per evaluation of the fast method */
 
 double
 potsynth_fast_check(potsynth_workspace * w)
 {
-  const size_t nchan = w->nchan, rho = w->radial_workspace_p->rho, nchp = w->nchp;
+  const size_t nfunc = w->nfunc, rho = w->radial_workspace_p->rho, nchp = w->nchp;
   const size_t nc = w->radial_workspace_p->ncheb;
   /* grid rows inside the colatitude range of the points, without the poles */
   const long rpole = (long) floor(M_PI * w->inv_h1);
@@ -1375,8 +1375,8 @@ potsynth_fast_check(potsynth_workspace * w)
   const long rfirst = (rlo > 1) ? rlo : 1;
   const long rlast = (rhi < rpole) ? rhi : rpole;
   const int nth = (w->nthreads > 0) ? w->nthreads : 1;
-  size_t * grp = malloc(nchan * sizeof(size_t));
-  size_t * sel = malloc(nchan * sizeof(size_t));
+  size_t * grp = malloc(nfunc * sizeof(size_t));
+  size_t * sel = malloc(nfunc * sizeof(size_t));
   double * b1 = malloc(rho * sizeof(double));
   size_t * tmin = NULL;
   double * tops = NULL, * r = NULL, * th = NULL, * ph = NULL, * of = NULL, * od = NULL;
@@ -1390,13 +1390,13 @@ potsynth_fast_check(potsynth_workspace * w)
   long row;
   int th0;
 
-  /* components, and the channels that are checked */
+  /* components, and the functionals that are checked */
   if (ok)
     {
-      ngrp = potsynth_quantities(w, grp);
+      ngrp = potsynth_components(w, grp);
       nsel = check_select(w, grp, ngrp, sel);
       ok = (nsel > 0);
-      /* candidates per channel: CHECK_TOP, fewer when there are many channels, so that
+      /* candidates per functional: CHECK_TOP, fewer when there are many functionals, so that
          the number of check points (and the cost of their direct sum) stays bounded */
       ctop = CHECK_BUDGET / nsel;
       ctop = (ctop > CHECK_TOP) ? CHECK_TOP : ((ctop < CHECK_TOP_MANY) ? CHECK_TOP_MANY : ctop);
@@ -1415,7 +1415,7 @@ potsynth_fast_check(potsynth_workspace * w)
       ph = malloc(npt * sizeof(double));
       of = malloc(nsel * npt * sizeof(double));
       od = malloc(nsel * npt * sizeof(double));
-      buf = malloc(nchan * CHECK_CHUNK * sizeof(double));
+      buf = malloc(nfunc * CHECK_CHUNK * sizeof(double));
       acc = calloc(4 * ngrp, sizeof(double));
       ok = (tops && tmin && topr && topc && r && th && ph && of && od && buf && acc);
       if (!ok)
@@ -1433,7 +1433,7 @@ potsynth_fast_check(potsynth_workspace * w)
           b1[i] = (w->radial_workspace_p->ud > 0.0) ? s : w->radial_workspace_p->basis[i * nc];
         }
 
-      /* candidates: largest |Laplacian| of each checked channel at r = rmin, one list per thread.
+      /* candidates: largest |Laplacian| of each checked functional at r = rmin, one list per thread.
        * Each node's radial sum is computed once: a thread keeps the sums of three
        * consecutive rows (columns -1..nf2) and adds one row per step; its rows are
        * consecutive under the static schedule (otherwise the three rows are recomputed) */
@@ -1601,7 +1601,7 @@ potsynth_fast_check(potsynth_workspace * w)
         npt = n;
       }
 
-      /* fast method: channel values (no output map) of the checked channels */
+      /* fast method: functional values (no output map) of the checked functionals */
       {
         potsynth_eval_workspace * ew;
         size_t i0;
@@ -1632,7 +1632,7 @@ potsynth_fast_check(potsynth_workspace * w)
       }
     }
 
-  /* direct sum of the checked channels */
+  /* direct sum of the checked functionals */
   if (ok)
     {
       const int st = check_direct(w, nsel, sel, npt, r, th, ph, od);
@@ -1655,7 +1655,7 @@ potsynth_fast_check(potsynth_workspace * w)
 
           for (c = 0; c < nsel; ++c)
             {
-              const double wt = potsynth_chan_weight(w, sel[c]);
+              const double wt = potsynth_func_weight(w, sel[c]);
               const double d = of[c * npt + i] - od[c * npt + i];
 
               e2[grp[sel[c]]] += wt * wt * d * d;
@@ -1685,43 +1685,43 @@ potsynth_fast_check(potsynth_workspace * w)
 
 /*
 check_select()
-  Channels checked by potsynth_fast_check(): all channels, or for a model with
-more than CHECK_MAXCOMP components the channels of the CHECK_MAXCOMP components
+  Functionals checked by potsynth_fast_check(): all functionals, or for a model with
+more than CHECK_MAXCOMP components the functionals of the CHECK_MAXCOMP components
 with the largest share of their power in the highest eighth of the degrees
 
 Inputs: w    - workspace
-        grp  - component of each channel (potsynth_quantities())
+        grp  - component of each functional (potsynth_components())
         ngrp - number of components
-        sel  - (output) checked channels, ascending; length nchan
+        sel  - (output) checked functionals, ascending; length nfunc
 
-Return: number of checked channels (0 if memory could not be allocated)
+Return: number of checked functionals (0 if memory could not be allocated)
 */
 
 static size_t
 check_select(const potsynth_workspace * w, const size_t * grp, const size_t ngrp, size_t * sel)
 {
-  const size_t nchan = w->nchan, L1 = w->lmax + 1;
+  const size_t nfunc = w->nfunc, L1 = w->lmax + 1;
   const size_t ltail = w->lmax - w->lmax / 8;
   size_t nsel = 0, c;
 
   if (ngrp <= CHECK_MAXCOMP)
     {
-      for (c = 0; c < nchan; ++c)
+      for (c = 0; c < nfunc; ++c)
         sel[c] = c;
 
-      return nchan;
+      return nfunc;
     }
   else
     {
-      double * wn = malloc(nchan * L1 * sizeof(double));
+      double * wn = malloc(nfunc * L1 * sizeof(double));
       double * tail = calloc(ngrp, sizeof(double));
       unsigned char * pick = calloc(ngrp, 1);
       size_t g, k, l;
 
       if (wn != NULL && tail != NULL && pick != NULL && potsynth_radial_weights(w, 1, wn) == POTSYNTH_SUCCESS)
         {
-          /* the weights of a component (the same for its channels) have unit sum of squares */
-          for (c = 0; c < nchan; ++c)
+          /* the weights of a component (the same for its functionals) have unit sum of squares */
+          for (c = 0; c < nfunc; ++c)
             {
               double s = 0.0;
 
@@ -1744,7 +1744,7 @@ check_select(const potsynth_workspace * w, const size_t * grp, const size_t ngrp
               pick[gmax] = 1;
             }
 
-          for (c = 0; c < nchan; ++c)
+          for (c = 0; c < nfunc; ++c)
             {
               if (pick[grp[c]])
                 sel[nsel++] = c;
@@ -1761,18 +1761,18 @@ check_select(const potsynth_workspace * w, const size_t * grp, const size_t ngrp
 
 /*
 check_direct()
-  Direct sum of some channels of a model at points, for potsynth_fast_check():
-a model of the direct method with these channels only, which shares the
+  Direct sum of some functionals of a model at points, for potsynth_fast_check():
+a model of the direct method with these functionals only, which shares the
 coefficients of w
 
 Inputs: w    - workspace
-        nsel - number of channels
-        sel  - channels, length nsel
+        nsel - number of functionals
+        sel  - functionals, length nsel
         n    - number of points
         r    - radii, length n
         th   - colatitudes, length n
         ph   - longitudes, length n
-        out  - (output) channel values out[c*n + i], length nsel*n
+        out  - (output) functional values out[c*n + i], length nsel*n
 
 Return: success or error
 */
@@ -1791,7 +1791,7 @@ check_direct(const potsynth_workspace * w, const size_t nsel, const size_t * sel
     np += w->pbase[sel[c] + 1] - w->pbase[sel[c]];
 
   ws.method = POTSYNTH_METHOD_DIRECT;
-  ws.nchan = nsel;
+  ws.nfunc = nsel;
   ws.nout = nsel;
   ws.omap = NULL;
   ws.npart = np;
@@ -1800,7 +1800,7 @@ check_direct(const potsynth_workspace * w, const size_t nsel, const size_t * sel
   ws.doff = NULL;
   ws.tcol = NULL;
   ws.tpost = NULL;
-  ws.tchan = NULL;
+  ws.tfunc = NULL;
   ws.dW = NULL;
   ws.rpow = malloc(nsel * sizeof(int));
   ws.ccomp = malloc(nsel * sizeof(int));

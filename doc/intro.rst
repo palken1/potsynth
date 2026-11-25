@@ -75,7 +75,7 @@ the Swarm SHC format and the ICGEM ``.gfc`` format can be read directly. Time-de
 for CHAOS), where a parallel direct sum is already fast, so time-dependent coefficients
 are not handled.
 
-The core of the library is generic. It evaluates any set of *channels*, meaning linear
+The core of the library is generic. It evaluates any set of *functionals*, meaning linear
 functionals of a potential such as :math:`V`, its radial derivative, or its horizontal
 gradient. Three front-ends supply the usual quantities:
 
@@ -89,7 +89,7 @@ gradient. Three front-ends supply the usual quantities:
   divergence and curl.
 
 The method does not need a potential. A model may hold several coefficient sets, with
-quantities that combine them, and all of them share one grid: many fields are then
+functionals that combine them, and all of them share one grid: many fields are then
 evaluated with one sum per point. The radial dependence may be the powers of
 :math:`a/r` of a potential, or radial functions supplied by the caller, for fields that
 are known at a number of radii or in any other radial basis (see

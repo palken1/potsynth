@@ -7,15 +7,15 @@ Algorithm
 This chapter describes the mathematics behind the library. It is meant for users who
 want to know where the speed and the accuracy come from, and for developers.
 
-Model and channels
+Model and functionals
 ==================
 
 The library works with an internal potential expanded in 4-:math:`\pi` fully
 normalized associated Legendre functions :math:`\bar{P}_l^m`, with coefficients
-:math:`C_{lm}, S_{lm}`. Every quantity it computes has the form
+:math:`C_{lm}, S_{lm}`. Every functional it computes has the form
 
 .. math::
-   :label: channel
+   :label: functional
 
    f_c(r,\theta,\phi) = \sum_{l=l_{min}}^{L} \sum_{m=0}^{\min(l,M)}
    \rho_c(l)\, u^{l+p_c}\; T_c\!\left[\bar{P}_l^m(\cos\theta)\right]\;
@@ -23,7 +23,7 @@ normalized associated Legendre functions :math:`\bar{P}_l^m`, with coefficients
    \qquad u = \frac{a}{r},
 
 where :math:`l_{min}` and :math:`L` are the minimum and maximum degree, :math:`M` is the
-maximum order, and :math:`c` labels a *channel*. Each channel is defined by:
+maximum order, and :math:`c` labels a *functional*. Each functional is defined by:
 
 - a per-degree factor :math:`\rho_c(l)`;
 - a radial power offset :math:`p_c`;
@@ -34,7 +34,7 @@ maximum order, and :math:`c` labels a *channel*. Each channel is defined by:
 - an operator :math:`D_c` in longitude, either the identity or :math:`d/d\phi`.
 
 For example, the magnetic field :math:`\mathbf{B} = -\nabla V` of
-:eq:`mag_potential` is the set of three channels
+:eq:`mag_potential` is the set of three functionals
 
 .. math::
 
@@ -45,13 +45,13 @@ For example, the magnetic field :math:`\mathbf{B} = -\nabla V` of
 with :math:`[\ldots] = C_{lm}\cos m\phi + S_{lm}\sin m\phi` and
 :math:`C_{lm} = g_l^m/\sqrt{2l+1}`, :math:`S_{lm} = h_l^m/\sqrt{2l+1}` (conversion from
 Schmidt to 4-:math:`\pi` normalization). The gravity front-end uses the same mechanism
-for :eq:`grav_potential`: :math:`V` is the channel :math:`(GM/a)\, u^{l+1} \bar{P}_l^m`,
-and :math:`\mathbf{g} = \nabla V` has the three channels above with factors
+for :eq:`grav_potential`: :math:`V` is the functional :math:`(GM/a)\, u^{l+1} \bar{P}_l^m`,
+and :math:`\mathbf{g} = \nabla V` has the three functionals above with factors
 :math:`-(GM/a^2)(l+1)` and :math:`GM/a^2`, without the minus signs.
 
-Nothing in the method requires the quantities to come from one potential. A model may
-hold several coefficient sets, and a quantity may be a sum of terms of the form
-:eq:`channel` with different sets, as long as the terms belong to one field component
+Nothing in the method requires the functionals to come from one potential. A model may
+hold several coefficient sets, and a functional may be a sum of terms of the form
+:eq:`functional` with different sets, as long as the terms belong to one field component
 (a scalar, a horizontal vector, or a horizontal tensor). The horizontal components of
 a vector spherical harmonic expansion
 :math:`\sum_{lm} b_{lm}\boldsymbol\Psi_{lm} + c_{lm}\boldsymbol\Phi_{lm}`, for example,
@@ -64,22 +64,22 @@ are
    V_\phi &= \sum \frac{\bar{P}_l^m}{\sin\theta}\, \frac{\partial}{\partial\phi}[b] \;+\;
              \sum \frac{d\bar{P}_l^m}{d\theta}\, [c],
 
-where :math:`[b]` and :math:`[c]` stand for the brackets of :eq:`channel` with the
+where :math:`[b]` and :math:`[c]` stand for the brackets of :eq:`functional` with the
 coefficients of each set. The steps below apply unchanged: each term is accumulated
 with the coefficients of its own set, the reflection of each term under
 :math:`\theta \to \pi - \theta` follows its own operator (step 2), and the weights that
-control the accuracy of a component are summed over its sets: in each channel the
+control the accuracy of a component are summed over its sets: in each functional the
 terms with the same operator are added with their coefficients before squaring, and
 other terms add in power, so that sets which nearly cancel (the difference of two
-epochs, say) get the radial basis and window of their sum. All quantities of all sets
+epochs, say) get the radial basis and window of their sum. All functionals of all sets
 share one grid, so one window sum gives them all.
 
 The radial dependence need not be a power of :math:`a/r` either. Step 1 below writes
-each quantity as :math:`\sum_i b_i(u)\, G_i(\theta,\phi)` with radial functions found
+each functional as :math:`\sum_i b_i(u)\, G_i(\theta,\phi)` with radial functions found
 by an SVD; a model may instead take the radial functions from the caller
 (:ref:`radial-functions`), with one coefficient set for each function. Steps 2 to 5
 are then applied to the :math:`G_i` as they are, and step 1 is skipped. In the grid of
-such a model the quantities of one radial function are stored next to each other, so
+such a model the functionals of one radial function are stored next to each other, so
 that the window sum of a point covers only the functions that are nonzero at its
 radius. The vector spherical harmonic front-end (:ref:`vsh-frontend`) is built on both
 extensions.
@@ -101,7 +101,7 @@ The fast method has two phases.
 **Evaluation.** This is done once per point.
 
 5. Compute the :math:`\rho` radial values :math:`b_i(a/r)`, form a :math:`w \times w`
-   weighted sum of nearby grid values for all channels at once, and combine the two.
+   weighted sum of nearby grid values for all functionals at once, and combine the two.
 
 Step 5 costs :math:`O(\rho\, w^2)` operations per point, which does not depend on
 :math:`L`. Steps 3 and 5 together are a type-2 *non-uniform FFT* (NUFFT). Unlike a
@@ -111,7 +111,7 @@ written for this specific structure.
 Step 1: radial separation
 =========================
 
-The radius enters :eq:`channel` only through the powers :math:`u^{l+p}`. All points
+The radius enters :eq:`functional` only through the powers :math:`u^{l+p}`. All points
 lie in a shell :math:`r_{\min} \le r \le r_{\max}`, so :math:`u` lies in an interval
 :math:`[u_0, u_1] = [a/r_{\max}, a/r_{\min}]`. On a narrow interval the functions
 :math:`u^{l+p}` for different :math:`l` look very much alike, so they are numerically
@@ -122,7 +122,7 @@ low-rank:
    u^{l+p_c} \approx \sum_{i=1}^{\rho} \beta_{c,i,l}\, b_i(u),
    \qquad u \in [u_0, u_1].
 
-Substituting this into :eq:`channel` separates the radius from the angles:
+Substituting this into :eq:`functional` separates the radius from the angles:
 
 .. math::
    :label: separated
@@ -154,7 +154,7 @@ A one-sided Jacobi SVD, :math:`X = U S W^T`, gives singular values accurate to t
 level of rounding, which the machine-precision mode needs. The rank :math:`\rho` starts
 as the number of singular values above :math:`\tau_r s_1`, where
 :math:`\tau_r = \varepsilon/2` by default, and is then raised until a bound on the
-maximum error of each quantity on its own is within :math:`\tau_r/2` at the nodes and
+maximum error of each irreducible component on its own is within :math:`\tau_r/2` at the nodes and
 :math:`\tau_r` between them (see :ref:`radial-weights`). Then:
 
 .. math::
@@ -202,12 +202,12 @@ potential has no toroidal part:
    \mathbf{B} = -\nabla V = \sum_{l,m} u^{l+2}\, c_{lm}
    \left[(l+1)\,\mathbf{Y}_{lm} - \mathbf{\Psi}_{lm}\right].
 
-**Quantities.** The channels of a model form *quantities*: channels with the same
+**Irreducible components.** The functionals of a model form *irreducible components*: functionals with the same
 radial power :math:`p` that are the parts of one field of a given spin weight
 :math:`s`:
 
 ========  ===========================================  ==========================================
-spin      channels :math:`T_c D_c`                     examples
+spin      functionals :math:`T_c D_c`                     examples
 ========  ===========================================  ==========================================
 0         :math:`\bar{P}`                              :math:`V`, :math:`B_r`, :math:`g_r`, :math:`T_{rr}`
 1         :math:`\partial_\theta\bar{P}` and
@@ -219,17 +219,17 @@ spin      channels :math:`T_c D_c`                     examples
 
 The spin-1 pair is the surface gradient :math:`\mathbf{\Psi}`; the spin-2 pair is the
 trace-free horizontal part of the Hessian, :math:`\mathcal{B}` counting twice because
-:math:`T_{\theta\phi}` appears twice in the tensor. Any other channel (for example
-:math:`\partial_\phi \bar{P}` alone) is a quantity of its own.
+:math:`T_{\theta\phi}` appears twice in the tensor. Any other functional (for example
+:math:`\partial_\phi \bar{P}` alone) is an irreducible component of its own.
 
-In a model with several coefficient sets, channels form a quantity only if they also
-use the same sets: the horizontal components of one vector field are a quantity, those
-of two fields are two. The caller may also name the quantities, by giving each output a
+In a model with several coefficient sets, functionals form an irreducible component only if they also
+use the same sets: the horizontal components of one vector field are an irreducible component, those
+of two fields are two. The caller may also name the irreducible components, by giving each output a
 component label and a weight (the :math:`\gamma_c` below); this is how a tensor built
 from two coefficient sets is declared. In the weights that follow, the power
-:math:`\|C_l\|^2` of a quantity is then summed over the sets of its terms, and, with
+:math:`\|C_l\|^2` of an irreducible component is then summed over the sets of its terms, and, with
 radial functions of the caller, over the sets of all radial functions.
-:c:member:`potsynth_info.ncomp` is the number of quantities of a model.
+:c:member:`potsynth_info.ncomp` is the number of irreducible components of a model.
 
 **Mean squares.** For one 4-:math:`\pi` normalized harmonic
 :math:`\bar{P}_l^m(\cos\theta)\cos m\phi`, the mean square over the sphere of each
@@ -244,7 +244,7 @@ operator is
    \qquad
    \kappa_{\mathcal{A}} = \lambda_2(l) - 4\kappa_{\mathcal{B}\partial_\phi},
 
-and a longitude derivative multiplies by :math:`m^2`. Within a quantity the
+and a longitude derivative multiplies by :math:`m^2`. Within an irreducible component the
 dependence on :math:`m` cancels:
 
 .. math::
@@ -259,26 +259,26 @@ scheme for the potential, its gradient and its Hessian (Rummel and van Gelderen,
 1995). The test suite checks every :math:`\kappa` against numerical integration.
 
 **Weights.** The mean square over the sphere at :math:`r = a` of the degree-:math:`l`
-part of a quantity :math:`q` is
+part of an irreducible component :math:`q` is
 
 .. math::
 
    W_{q,l}^2 = \sum_{c \in q} \gamma_c\, \rho_c(l)^2 \sum_{m} \kappa_c(l,m)\,
    \left(C_{lm}^2 + S_{lm}^2\right),
 
-with :math:`\gamma_c = 4` for :math:`\mathcal{B}\partial_\phi` in a spin-2 quantity and
-1 otherwise. For a complete quantity this is
+with :math:`\gamma_c = 4` for :math:`\mathcal{B}\partial_\phi` in a spin-2 irreducible component and
+1 otherwise. For a complete irreducible component this is
 :math:`\rho(l)^2 \lambda_s(l) \|C_l\|^2`, with
-:math:`\|C_l\|^2 = \sum_m (C_{lm}^2 + S_{lm}^2)`. Each quantity is normalized,
+:math:`\|C_l\|^2 = \sum_m (C_{lm}^2 + S_{lm}^2)`. Each irreducible component is normalized,
 :math:`\hat{w}_{q,l} = W_{q,l} / (\sum_l W_{q,l}^2)^{1/2}`, and the radial functions
-:math:`u^{l+p}` take the largest weight of the quantities with that power:
+:math:`u^{l+p}` take the largest weight of the irreducible components with that power:
 
 .. math::
 
    w_{p,l} = \max_{q:\, p_q = p} \hat{w}_{q,l}.
 
 For the magnetic field (Schmidt coefficients,
-:math:`\mathcal{G}_l^2 = \sum_m [(g_l^m)^2 + (h_l^m)^2]`) the two quantities are
+:math:`\mathcal{G}_l^2 = \sum_m [(g_l^m)^2 + (h_l^m)^2]`) the two irreducible components are
 
 .. math::
 
@@ -290,7 +290,7 @@ whose sum :math:`(l+1)\mathcal{G}_l^2` is the Lowes--Mauersberger spectrum (Lowe
 radial basis hardly depends on which of them, or their sum, is used.
 
 **What the SVD minimizes.** Let :math:`e_{p,l}(u) = u^{l+p} - \sum_i \beta_{i,l} b_i(u)`
-be the radial error. For a complete quantity, orthogonality gives the mean square
+be the radial error. For a complete irreducible component, orthogonality gives the mean square
 error over the sphere exactly as :math:`\sum_l W_{q,l}^2\, e_{p,l}(u)^2`, so its
 relative error, averaged over the shell with the Chebyshev weight, satisfies
 
@@ -301,22 +301,22 @@ relative error, averaged over the shell with the Chebyshev weight, satisfies
    \le \sum_l w_{p,l}^2 \sum_j c_j\, e_{p,l}(u_j)^2 = \|X - X_\rho\|_F^2.
 
 The truncated SVD minimizes the right-hand side (Eckart--Young), so one radial basis
-bounds the error of every quantity at once, each relative to its own size. The sum
+bounds the error of every irreducible component at once, each relative to its own size. The sum
 over :math:`j` is the Gauss--Chebyshev--Lobatto rule for
-:math:`\int_0^\pi e(u_c + u_d\cos\psi)^2\, d\psi`. For an incomplete quantity (for
+:math:`\int_0^\pi e(u_c + u_d\cos\psi)^2\, d\psi`. For an incomplete irreducible component (for
 example only :math:`\partial_\theta\bar{P}`), the weights are still the exact mean
 squares of each degree, but different degrees are not orthogonal, and the bound holds
 only approximately.
 
-**Per-quantity check.** The singular value rule :math:`s_{\rho+1} \le \tau_r s_1` bounds
+**Check of each irreducible component.** The singular value rule :math:`s_{\rho+1} \le \tau_r s_1` bounds
 the error of all weighted functions together, with the largest weight over the
-quantities. A quantity whose size sits mostly in degrees where another quantity
+irreducible components. An irreducible component whose size sits mostly in degrees where another irreducible component
 dominates the weights is then covered only on average: for EGM2008 at degree 2190, the
 horizontal gravity gradients (:math:`(T_{r\theta}, T_{r\phi})` and the spin-2 part) have
 their largest values 300--600 times below :math:`T_{rr}` and much more of their size at
 high degree, and with the singular value rule alone their maximum error reaches
 :math:`2.6\varepsilon` at :math:`\varepsilon = 10^{-6}`. The rank is therefore raised,
-one function at a time, until for every quantity :math:`q`
+one function at a time, until for every irreducible component :math:`q`
 
 .. math::
 
@@ -326,13 +326,13 @@ one function at a time, until for every quantity :math:`q`
 where :math:`e_{p,l}(u_j)` is the residual of :math:`u_j^{l+p}` after projection onto the
 first :math:`\rho` functions. By the addition theorem,
 :math:`\sum_m |{}_sY_{lm}|^2 = (2l+1)/4\pi` at every point of the sphere, also for the
-spin-weighted harmonics of the vector and tensor quantities, so a degree-:math:`l` part
+spin-weighted harmonics of the vector and tensor irreducible components, so a degree-:math:`l` part
 with root mean square :math:`W_{q,l}` over the sphere is at most
 :math:`\sqrt{2l+1}\,W_{q,l}` anywhere on it. The left side therefore bounds the maximum
 of the radial error of :math:`q` over the sphere at the worst node, in any coordinate
 system, and the right side is its largest root mean square in the shell, which is at most
 its largest magnitude. The residuals follow from the singular vectors at a cost of
-:math:`O(L K^2)` per quantity. :math:`\tau_r` is floored at
+:math:`O(L K^2)` per irreducible component. :math:`\tau_r` is floored at
 :math:`16\,\epsilon_{\rm mach}`, below which the residuals are rounding, and a rank is
 also accepted when the bound is within 4 times its rounding floor, or has not fallen by 4
 times over the next 10 ranks (truncation errors fall by about ten per rank, rounding does
@@ -401,7 +401,7 @@ For each order :math:`m`, the functions :math:`H_m = S_A - i S_B` are evaluated 
 :math:`N_\theta \ge 2L+2` equally spaced colatitudes :math:`\theta_j = (j+\tfrac12)\,
 2\pi/N_\theta`. Here :math:`S_A` and :math:`S_B` are the sums over :math:`l` that
 multiply :math:`\cos m\phi` and :math:`\sin m\phi`. The half-step shift keeps the nodes
-off the poles. One FFT per channel then gives the coefficients
+off the poles. One FFT per functional then gives the coefficients
 :math:`\hat{H}_m[p]` *exactly*. This step makes no approximation.
 
 **Symmetries.** :math:`N_\theta` is a multiple of 4, and the Legendre recursion runs
@@ -447,7 +447,7 @@ parity of :math:`m`.
 **Fused accumulation.** The Legendre values are never stored. In blocks of 8 nodes,
 each column recursion (fixed :math:`m`, increasing :math:`l`) is consumed immediately
 by a register-blocked kernel. The kernel accumulates the even and odd sums of every
-(channel, radial function) pair with precomputed weights
+(functional, radial function) pair with precomputed weights
 :math:`\beta_{c,i,l}\rho_c(l)C_{lm}`. Coefficients and recursion factors are stored in
 *M-major* order (fixed :math:`m` contiguous in :math:`l`), which is the order the
 recursion reads them in. The orders :math:`m` are distributed over threads.
@@ -497,7 +497,7 @@ order :math:`m`, the coefficients :math:`\hat{H}_m[p]` are multiplied by
 FFT of length :math:`n_{f,1}` to the fine colatitude grid. The real function
 :math:`G_{c,i}` is stored directly as a real grid. Along longitude each row is a
 half-complex spectrum (:math:`X_0 = \mathrm{Re}\, T_0`, :math:`X_m = T_m/2`), which one
-inverse real FFT of length :math:`n_{f,2}` per row and channel turns into grid values.
+inverse real FFT of length :math:`n_{f,2}` per row and functional turns into grid values.
 These spectra are written into the grid itself, so peak memory during set-up is about
 the size of the final grid.
 
@@ -524,7 +524,7 @@ Fourier series in :math:`\theta` are still computed for the whole circle.
 - **Padding columns:** the grid has :math:`w/2 + 1` periodically repeated columns before
   :math:`\phi = 0` and :math:`w + 1` after :math:`\phi = 2\pi`, so a window never wraps
   around in longitude.
-- **Channel layout:** all :math:`n_{ch} = \rho \times` (number of channels) values of a
+- **Functional layout:** all :math:`n_{ch} = \rho \times` (number of functionals) values of a
   grid node are stored next to each other, padded to a multiple of 4. One row of a
   point's window is then a single contiguous block of :math:`w\, n_{ch}` values.
 
@@ -537,7 +537,7 @@ For a point :math:`(r,\theta,\phi)`:
    :math:`\ell_2 = \lceil \phi/h_2 - w/2 \rceil`, compute the :math:`2w` weights
    :math:`\phi(\theta - (\ell_1+a)h_1)` and :math:`\phi(\phi - (\ell_2+b)h_2)`. The
    indices are clamped to the stored grid, so no input can read out of bounds.
-2. **Window sum, all channels at once:**
+2. **Window sum, all functionals at once:**
 
    .. math::
 
@@ -545,9 +545,9 @@ For a point :math:`(r,\theta,\phi)`:
       \qquad q = 1 \ldots n_{ch}.
 
    This is the main cost, :math:`n_{ch} w^2` multiply-adds. The kernel processes 8
-   channels at a time with 4 independent partial sums each, all in vector registers,
+   functionals at a time with 4 independent partial sums each, all in vector registers,
    which hides the latency of the fused multiply-add. A model with 1024 or more grid
-   channels (many fields on one grid) is summed node after node instead: the channels
+   functionals (many fields on one grid) is summed node after node instead: the functionals
    of a node are then read from start to end, which is what limits the speed when they
    no longer fit in the cache.
 3. **Radial values** :math:`b_i(a/r)`, from their Chebyshev series.
@@ -555,7 +555,7 @@ For a point :math:`(r,\theta,\phi)`:
 
 With radial functions of the caller (:ref:`radial-functions`), step 3 comes first: the
 caller's function returns the functions that are nonzero at :math:`r`, and the window
-sum of step 2 covers only their grid channels, which are stored next to each other. The
+sum of step 2 covers only their grid functionals, which are stored next to each other. The
 cost per point is then :math:`n_c w^2` times the number of functions that are nonzero
 at a radius, whatever the number of radial functions of the model.
 
@@ -581,13 +581,13 @@ Only :math:`S` (through :math:`w`) and :math:`R` (through :math:`\rho`) are appr
 The direct method
 =================
 
-The direct method evaluates :eq:`channel` point by point:
+The direct method evaluates :eq:`functional` point by point:
 
 - **Blocks of points.** Points are taken 8 at a time. For each order :math:`m`, a single
   pass over :math:`l` runs the Legendre column recursion (vectorized across 4 points),
   multiplies by the running radial factor :math:`u^l`, and adds the term to every
-  channel. All accumulators stay in vector registers. Specialized kernels exist for
-  1--6 channels, with a generic version otherwise.
+  functional. All accumulators stay in vector registers. Specialized kernels exist for
+  1--6 functionals, with a generic version otherwise.
 - **Quantities carried across orders.** :math:`\sin^{m-1}\theta` (as mantissa and
   exponent), :math:`u^m`, and :math:`\cos m\phi`, :math:`\sin m\phi` are updated from
   one order to the next. The angles use a rotation that is recomputed exactly every 16
@@ -697,7 +697,7 @@ Apply these to one term :math:`V = u^{l+1}\, \bar{P}_l^m(\cos\theta)\, \Phi_m(\p
 becomes :math:`u^{l+3}/a^2` times one angular function:
 
 .. math::
-   :label: hessian_channels
+   :label: hessian_functionals
 
    T_{rr} &= \frac{u^{l+3}}{a^2}\, (l+1)(l+2)\, \bar{P}_l^m\, \Phi_m, &
    T_{r\theta} &= -\frac{u^{l+3}}{a^2}\, (l+2)\, \frac{d\bar{P}_l^m}{d\theta}\, \Phi_m, \\
@@ -717,7 +717,7 @@ with the two new angular operators
 The remaining components follow from the trace:
 :math:`T_{\theta\theta} = \tfrac12 (-T_{rr} + D)` and
 :math:`T_{\phi\phi} = \tfrac12 (-T_{rr} - D)`, where :math:`D = T_{\theta\theta} - T_{\phi\phi}`.
-So the five channels :math:`T_{rr}, T_{r\theta}, T_{r\phi}, D, T_{\theta\phi}` give the
+So the five functionals :math:`T_{rr}, T_{r\theta}, T_{r\phi}, D, T_{\theta\phi}` give the
 whole tensor. The first three use the existing operators :math:`\bar{P}`,
 :math:`d\bar{P}/d\theta` and :math:`\bar{P}/\sin\theta`.
 
@@ -805,12 +805,12 @@ Since :math:`E_l^m = m\,x\,Q_l^m + s^2 G_l^m`, the operators become, for every
 
 The prefactors :math:`m(m-1)` and :math:`m-1` vanish exactly at the orders where
 :math:`s^{m-2}` would be singular, so no division by :math:`\sin\theta` occurs at any
-order. In the direct method, each channel is a sum of *terms*: the sum over :math:`l` of
+order. In the direct method, each functional is a sum of *terms*: the sum over :math:`l` of
 one column (:math:`Q`, :math:`E` or :math:`G`) with a weight row, multiplied afterwards
 by a power of :math:`s` (and possibly :math:`x`). :math:`\mathcal{A}` has three terms
 and :math:`\mathcal{B}` two, all fed by the same pass of the recursion. Terms are
 accumulated in vector registers in groups of up to six, and :math:`G` is only computed
-when a channel needs it. The full tensor (five channels, eight terms) costs about three
+when a functional needs it. The full tensor (five functionals, eight terms) costs about three
 times as much per point as the three components of :math:`\mathbf{B}`.
 
 The fast method uses the same terms during set-up (see Step 2), and its grid needs no
@@ -831,7 +831,7 @@ extra resolution for the gradient tensor.
   against the definitions by numerical differentiation, for :math:`l \le 8`, all
   :math:`m`, and points down to :math:`10^{-6}` from both poles;
 - the pole values, against the limits approached along a meridian;
-- the full component table :eq:`hessian_channels`, against the Cartesian Hessian
+- the full component table :eq:`hessian_functionals`, against the Cartesian Hessian
   :math:`\partial^2 V/\partial x_i \partial x_j` rotated to the spherical basis, with
   agreement to :math:`10^{-40}`.
 
@@ -844,19 +844,19 @@ The fast method has three error sources:
 
 - the window, controlled by :math:`w`;
 - truncation of the radial SVD, controlled by :math:`\rho` (a bound on the maximum
-  error of every quantity within :math:`\varepsilon/2`, see :ref:`radial-weights`);
+  error of every irreducible component within :math:`\varepsilon/2`, see :ref:`radial-weights`);
 - floating-point rounding.
 
 The requested accuracy :math:`\varepsilon` is relative to the largest magnitude of each
-quantity (see :ref:`radial-weights`): a scalar channel such as :math:`V`, :math:`B_r` or
+irreducible component (see :ref:`radial-weights`): a scalar functional such as :math:`V`, :math:`B_r` or
 :math:`g_r` relative to its own maximum, the horizontal components :math:`B_\theta` and
 :math:`B_\phi` relative to :math:`\max|\mathbf{B}_h|`, with
-:math:`|\mathbf{B}_h| = (B_\theta^2 + B_\phi^2)^{1/2}`, and the tensor channels relative to
+:math:`|\mathbf{B}_h| = (B_\theta^2 + B_\phi^2)^{1/2}`, and the tensor functionals relative to
 the maxima of :math:`|T_{rr}|`, :math:`(T_{r\theta}^2 + T_{r\phi}^2)^{1/2}` and
-:math:`((T_{\theta\theta} - T_{\phi\phi})^2 + 4T_{\theta\phi}^2)^{1/2}`. Quantities of
+:math:`((T_{\theta\theta} - T_{\phi\phi})^2 + 4T_{\theta\phi}^2)^{1/2}`. Irreducible components of
 very different size, such as a potential and its gradient, are each resolved to
 :math:`\varepsilon`. This target does not depend on the orientation of the coordinate
-axes. A component can be much smaller than its quantity only because of the axes, for
+axes. A tensor or vector component can be much smaller than its irreducible component only because of the axes, for
 example :math:`g_\phi` against :math:`g_\theta` when the model contains the flattening
 term :math:`C_{20}`; its error is then larger than :math:`\varepsilon` relative to its own
 maximum. The window width is at least the smallest :math:`w` whose *measured* error is
@@ -865,11 +865,11 @@ where needed: the window sum returns a Fourier mode :math:`k` with relative alia
 error :math:`E(k) = \sum_{j\ne0} |\hat\phi(k + j n_f)| / \hat\phi(k)`, nearly flat over
 most of the band but some 30 times larger at its edge :math:`|k| = L`. The table was
 measured for the magnetic field at satellite altitude, whose power lies well inside the
-band. For each quantity, the set-up bounds the rms window error at the Chebyshev points
+band. For each irreducible component, the set-up bounds the rms window error at the Chebyshev points
 of the shell by :math:`(\sum_l w_l^2 u^{2(l+p)} \bar E_l^2)^{1/2}`, with
 :math:`\bar E_l = 2\max_{k\le l} E(k)`, and raises :math:`w` until half this bound,
-relative to the quantity's largest rms in the shell, is below :math:`\varepsilon`. This
-covers quantities with their power near the band edge (the horizontal gravity
+relative to the irreducible component's largest rms in the shell, is below :math:`\varepsilon`. This
+covers irreducible components with their power near the band edge (the horizontal gravity
 gradients) and shells that reach inside :math:`r = a`, where the highest degrees grow as
 :math:`u^l`.
 
@@ -878,17 +878,17 @@ This rule bounds a root mean square, not the maximum: a pointwise bound, with
 1 to 4 nodes more than any measured case needs, because it assumes that the aliasing
 errors of all Fourier modes add up at one point. After the set-up the chosen width is
 therefore checked against the direct sum, at the points where its error is likely to be
-largest: for each channel, the 16 grid nodes with the largest five-point Laplacian at the
+largest: for each functional, the 16 grid nodes with the largest five-point Laplacian at the
 bottom of the shell, and around each the four cell midpoints (where the error of a
 band-edge mode peaks), at the bottom, middle and top of the shell, plus 256 points
-uniform in the shell for the sizes of the quantities. If any quantity's error there
+uniform in the shell for the sizes of the irreducible components. If any irreducible component's error there
 exceeds :math:`\varepsilon`, :math:`w` is raised by one and the grid rebuilt; the radial
 basis does not depend on :math:`w` and is kept.
 
-A model with more than 64 quantities (many fields on one grid) is checked for the 64
-quantities with the largest share of their power in the highest eighth of the degrees,
-where the window error is largest, with 2 nodes per channel. The direct sum is computed
-for the channels of the checked quantities only, so the cost of the check does not grow
+A model with more than 64 irreducible components (many fields on one grid) is checked for the 64
+irreducible components with the largest share of their power in the highest eighth of the degrees,
+where the window error is largest, with 2 nodes per functional. The direct sum is computed
+for the functionals of the checked irreducible components only, so the cost of the check does not grow
 with the number of fields. In every
 case tested (LCS-1 and EGM2008, satellite shells and the topographic surface,
 :math:`10^{-3}` to :math:`10^{-13}`), the check found errors of :math:`0.09` to
@@ -935,7 +935,7 @@ Cost and memory
 - The window check (see :ref:`accuracy`) scans the grid once and evaluates the direct
   sum at a few thousand points: :math:`O(L^2 (n_{ch}\rho + n_{\rm pts}))`.
 - A model with radial functions of the caller has no radial step; its
-  :math:`n_{ch}` is the number of quantities times the number of radial functions.
+  :math:`n_{ch}` is the number of functionals times the number of radial functions.
 
 In practice set-up takes about 0.07 s at :math:`L = 185` and about 1 s at :math:`L = 720`
 on 16 threads.
@@ -959,7 +959,7 @@ None of these depend on :math:`L`. At :math:`\varepsilon = 10^{-10}`
 (:math:`w = 11`, :math:`n_{ch} = 27`) this is about 3300 multiply-adds, or 0.5 µs per
 point on one core.
 
-For thousands of grid channels the window of a point no longer fits in the cache
+For thousands of grid functionals the window of a point no longer fits in the cache
 (:math:`8 n_{ch} w^2` bytes: 9 MB for :math:`n_{ch} = 8000`, :math:`w = 12`), and the time
 is set by reading it from memory, not by the arithmetic. One measured case, 331 vector
 fields of degree 150 with 8 radial functions each (:math:`n_{ch} = 7944`) on a polar cap
@@ -980,8 +980,8 @@ Choosing between the methods
 The fast method has a one-time set-up cost: building the grid. After that, each point
 is much cheaper than with the direct method. So the direct method is faster for few
 points and the fast method for many. The table gives measured times on 16 threads with
-:math:`\varepsilon = 10^{-10}`: magnetic models with 3 channels, and EGM2008
-(:math:`L = 2190`) with 1 channel. The fast per-point time is the evaluation time for
+:math:`\varepsilon = 10^{-10}`: magnetic models with 3 functionals, and EGM2008
+(:math:`L = 2190`) with 1 functional. The fast per-point time is the evaluation time for
 :math:`10^6` points divided by :math:`10^6`; the direct per-point time was measured on
 :math:`2 \times 10^4` points (it does not depend on the number of points). Set-up is not
 included in the per-point times.
@@ -1002,7 +1002,7 @@ The direct method's cost per point is constant. The fast method's is constant on
 large point sets: each call also has a fixed cost (starting the threads, sorting the points
 into grid blocks), and larger grids need denser points before neighbouring points share
 cached grid rows. Measured fast evaluation time per point (16 threads,
-:math:`\varepsilon = 10^{-10}`, 3 channels, ``tests/bench.c``, best of 3):
+:math:`\varepsilon = 10^{-10}`, 3 functionals, ``tests/bench.c``, best of 3):
 
 ==============================  ========  ========  ========  ========  ========
 points                          1000      10 000    100 000   1e6       1e7

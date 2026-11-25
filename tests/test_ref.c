@@ -23,7 +23,7 @@ typedef struct
   double * r;           /* points */
   double * theta;
   double * phi;
-  double * B;           /* reference field, channel-major */
+  double * B;           /* reference field, functional-major */
 } test_ref_data;
 
 /* read reference data file; returns 0 on success */

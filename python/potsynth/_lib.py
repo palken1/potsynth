@@ -35,7 +35,7 @@ VSH_NORM_FULL, VSH_NORM_SCHMIDT = 0, 1
 LMAX = 2800
 
 
-class Channel_t(ctypes.Structure):
+class Functional_t(ctypes.Structure):
     _fields_ = [("rpow", ctypes.c_int),
                 ("rfac", c_double_p),
                 ("theta", ctypes.c_int),
@@ -111,7 +111,7 @@ class Info_t(ctypes.Structure):
     _fields_ = [("lmin", ctypes.c_size_t),
                 ("lmax", ctypes.c_size_t),
                 ("mmax", ctypes.c_size_t),
-                ("nchan", ctypes.c_size_t),
+                ("nfunc", ctypes.c_size_t),
                 ("nout", ctypes.c_size_t),
                 ("method", ctypes.c_int),
                 ("w", ctypes.c_int),
@@ -186,7 +186,7 @@ lib.potsynth_nlm.argtypes = [ctypes.c_size_t] * 3
 lib.potsynth_alloc.restype = ctypes.c_void_p
 lib.potsynth_alloc.argtypes = [ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, c_double_p,
                                ctypes.c_double, ctypes.c_double, ctypes.c_double,
-                               ctypes.c_size_t, ctypes.POINTER(Channel_t),
+                               ctypes.c_size_t, ctypes.POINTER(Functional_t),
                                ctypes.POINTER(Params_t)]
 
 lib.potsynth_mag_alloc.restype = ctypes.c_void_p

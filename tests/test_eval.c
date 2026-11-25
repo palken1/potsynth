@@ -1,7 +1,7 @@
 /*
  * test_eval.c
  *
- * Fast method against direct method for many models and channel sets
+ * Fast method against direct method for many models and functional sets
  */
 
 /* random coefficients with a decaying spectrum, indexed by potsynth_idx() */
@@ -65,16 +65,16 @@ Inputs: desc  - description
         mmax  - maximum order
         rmin  - minimum radius
         rmax  - maximum radius
-        nchan - number of channels
-        chan  - channels, or NULL for the magnetic front-end
+        nfunc - number of functionals
+        func  - functionals, or NULL for the magnetic front-end
         eps   - requested accuracy
         tol   - tolerance of the comparison
 */
 
 static void
 test_eval_model(const char * desc, const size_t lmin, const size_t lmax, const size_t mmax,
-                const double rmin, const double rmax, const size_t nchan,
-                const potsynth_channel * chan, const double eps, const double tol)
+                const double rmin, const double rmax, const size_t nfunc,
+                const potsynth_functional * func, const double eps, const double tol)
 {
   const double a = 6371.2;
   const size_t n = 3000;
@@ -82,8 +82,8 @@ test_eval_model(const char * desc, const size_t lmin, const size_t lmax, const s
   double * r = malloc(n * sizeof(double));
   double * theta = malloc(n * sizeof(double));
   double * phi = malloc(n * sizeof(double));
-  double * Bf = malloc(nchan * n * sizeof(double));
-  double * Bd = malloc(nchan * n * sizeof(double));
+  double * Bf = malloc(nfunc * n * sizeof(double));
+  double * Bd = malloc(nfunc * n * sizeof(double));
   potsynth_parameters params = potsynth_default_parameters();
   potsynth_workspace * wf, * wd;
   double emax = 0.0, bmax = 0.0;
@@ -94,14 +94,14 @@ test_eval_model(const char * desc, const size_t lmin, const size_t lmax, const s
   params.eps = eps;
 
   params.method = POTSYNTH_METHOD_FAST;
-  if (chan)
-    wf = potsynth_alloc(lmin, lmax, mmax, coef, a, rmin, rmax, nchan, chan, &params);
+  if (func)
+    wf = potsynth_alloc(lmin, lmax, mmax, coef, a, rmin, rmax, nfunc, func, &params);
   else
     wf = potsynth_mag_alloc(lmin, lmax, mmax, coef, a, rmin, rmax, POTSYNTH_MAG_B, &params);
 
   params.method = POTSYNTH_METHOD_DIRECT;
-  if (chan)
-    wd = potsynth_alloc(lmin, lmax, mmax, coef, a, rmin, rmax, nchan, chan, &params);
+  if (func)
+    wd = potsynth_alloc(lmin, lmax, mmax, coef, a, rmin, rmax, nfunc, func, &params);
   else
     wd = potsynth_mag_alloc(lmin, lmax, mmax, coef, a, rmin, rmax, POTSYNTH_MAG_B, &params);
 
@@ -115,7 +115,7 @@ test_eval_model(const char * desc, const size_t lmin, const size_t lmax, const s
       ps_test_int(potsynth_eval(n, r, theta, phi, Bf, ef), POTSYNTH_SUCCESS, "eval: %s fast", desc);
       ps_test_int(potsynth_eval(n, r, theta, phi, Bd, ed), POTSYNTH_SUCCESS, "eval: %s direct", desc);
 
-      for (i = 0; i < nchan * n; ++i)
+      for (i = 0; i < nfunc * n; ++i)
         {
           emax = fmax(emax, fabs(Bf[i] - Bd[i]));
           bmax = fmax(bmax, fabs(Bd[i]));
@@ -150,7 +150,7 @@ test_eval(void)
   const int dphi[7] = { 0, 1, 0, 1, 0, 1, 0 };
   const int rpow[7] = { 2, 2, 2, 2, 2, 2, 1 };
   double rfac_v[121], rfac_dv[121];
-  potsynth_channel grav[2], all[7];
+  potsynth_functional grav[2], all[7];
   size_t l, c;
 
   /* magnetic front-end */
@@ -183,7 +183,7 @@ test_eval(void)
   test_eval_model("V and dV/dr lmin=0 L=120", 0, 120, 120, a, a + 500.0, 2, grav, 1.0e-12, 1.0e-11);
   test_eval_model("V only L=50", 0, 50, 50, a, a + 500.0, 1, grav, 1.0e-12, 1.0e-11);
 
-  /* every theta operator with and without phi derivative: 7 channels, more than
+  /* every theta operator with and without phi derivative: 7 functionals, more than
    * the specialized direct kernels, so the generic direct path runs */
   for (c = 0; c < 7; ++c)
     {
@@ -193,5 +193,5 @@ test_eval(void)
       all[c].dphi = dphi[c];
     }
 
-  test_eval_model("7 channels L=70", 1, 70, 70, a, a + 500.0, 7, all, 1.0e-12, 1.0e-11);
+  test_eval_model("7 functionals L=70", 1, 70, 70, a, a + 500.0, 7, all, 1.0e-12, 1.0e-11);
 }

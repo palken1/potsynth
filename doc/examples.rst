@@ -92,7 +92,7 @@ Gravity field
 
 Both gravity examples evaluate the potential :math:`V` and the acceleration
 :math:`g_r, g_\theta, g_\phi` at :math:`10^6` random points in the 200--500 km shell, and
-compare the first 1000 points with the direct sum, quantity by quantity.
+compare the first 1000 points with the direct sum, output by output.
 
 - **Model source:** with a file argument, the model is read from an ICGEM ``.gfc`` file,
   for example EGM2008 (Pavlis et al., 2012), optionally truncated at a given degree.
@@ -133,7 +133,7 @@ Output:
       6678.704      57.5571    99.9989    59685986.0069    -893788.3076        1205.7504           6.0446
       6744.328      92.5910   226.3935    59129989.2152    -877583.7961        -112.0541          -7.5410
 
-Each quantity is accurate to :math:`\varepsilon` relative to its own size, although
+Each irreducible component is accurate to :math:`\varepsilon` relative to its own size, although
 :math:`V` and :math:`\mathbf{g}` differ by more than 7 orders of magnitude. The
 horizontal components are relative to the horizontal acceleration
 :math:`|\mathbf{g}_h| = (g_\theta^2 + g_\phi^2)^{1/2}` (see :ref:`accuracy`).

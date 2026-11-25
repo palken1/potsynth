@@ -68,7 +68,7 @@ test_tensor_grav(void)
   params.method = POTSYNTH_METHOD_DIRECT;
   w = potsynth_grav_alloc(0, L, L, coef, 1.0, 1.0, 0.0, 0.0, POTSYNTH_GRAV_T, &params);
   potsynth_get_info(&info, w);
-  ps_test_int((int) info.nchan, 5, "tensor: GRAV_T uses 5 channels");
+  ps_test_int((int) info.nfunc, 5, "tensor: GRAV_T uses 5 functionals");
   ps_test_int((int) info.nout, 6, "tensor: GRAV_T gives 6 outputs");
 
   T = malloc(6 * n * sizeof(double));

@@ -332,7 +332,7 @@ potsynth_alf_accum(const size_t nn, const size_t npair, const double * restrict 
 
 /*
 potsynth_op_nterm()
-  Number of terms of a channel with a given theta operator
+  Number of terms of a functional with a given theta operator
 */
 
 size_t
@@ -348,7 +348,7 @@ potsynth_op_nterm(const int op)
 
 /*
 potsynth_op_term()
-  Column and post-factor of term sub of a channel with a given theta operator
+  Column and post-factor of term sub of a functional with a given theta operator
 
 Inputs: op   - theta operator
         sub  - term number, < potsynth_op_nterm(op)

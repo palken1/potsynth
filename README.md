@@ -49,11 +49,11 @@ Documentation: `doc/` (Sphinx). Build it with `make -C doc html`, then open
   scaling. This supports degrees up to `POTSYNTH_LMAX` = 2800.
 - The results are correct at every point on the sphere, including both poles.
   P/sin(theta) and dP/dtheta are never formed by dividing by sin(theta).
-- A generic core evaluates linear functionals ("channels") of an internal potential. A
+- A generic core evaluates linear functionals ("functionals") of an internal potential. A
   model may hold several coefficient sets, with outputs that combine them, and all
   outputs share one grid; the radial dependence is the powers of a/r or radial functions
   supplied by the caller (fields known at a number of radii, splines, ...).
-  Front-ends map physical quantities onto channels:
+  Front-ends map physical quantities onto functionals:
   - `potsynth_mag`: B = -grad V and its gradient tensor grad B from Schmidt-normalized
     Gauss coefficients
   - `potsynth_grav`: potential V, acceleration g = grad V and gravity gradient tensor

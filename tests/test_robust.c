@@ -52,6 +52,13 @@ test_robust(void)
 
   params.method = POTSYNTH_METHOD_FAST;
 
+  /* the former name of potsynth_functional still compiles */
+  {
+    potsynth_channel old = { 0, NULL, POTSYNTH_THETA_P, 0 };
+    potsynth_functional * f = &old;
+    ps_test(f->theta != POTSYNTH_THETA_P, "robust: potsynth_channel is potsynth_functional");
+  }
+
   /* the free functions accept NULL, as free() does */
   potsynth_free(NULL);
   potsynth_eval_free(NULL);

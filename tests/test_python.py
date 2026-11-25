@@ -95,12 +95,12 @@ def test_api():
 
     # generic core: potential V and dV/dr agree between fast and direct
     nn = np.arange(L + 1, dtype=float)
-    chans = [potsynth.Channel(rpow=1, theta="P"), potsynth.Channel(rpow=2, theta="P", rfac=nn + 1)]
+    funcs = [potsynth.Functional(rpow=1, theta="P"), potsynth.Functional(rpow=2, theta="P", rfac=nn + 1)]
     coef = potsynth.coef_vector(g / np.sqrt(2 * nn + 1)[:, None], h / np.sqrt(2 * nn + 1)[:, None])
-    vf = potsynth.Model(coef, 1, L, chans, a, rmin, rmax, method="fast", eps=1e-12)(r, th, ph)
-    vd = potsynth.Model(coef, 1, L, chans, a, method="direct")(r, th, ph)
+    vf = potsynth.Model(coef, 1, L, funcs, a, rmin, rmax, method="fast", eps=1e-12)(r, th, ph)
+    vd = potsynth.Model(coef, 1, L, funcs, a, method="direct")(r, th, ph)
     check(rel_err(vf, vd) < 1e-11, f"core fast vs direct {rel_err(vf, vd):.2e}")
-    # dV/dr channel equals B_r of the magnetic model
+    # dV/dr functional equals B_r of the magnetic model
     check(rel_err(vd[1], Bref[0]) < 1e-13, f"core dV/dr vs B_r {rel_err(vd[1], Bref[0]):.2e}")
     # SHC reader: file -> model equals vector -> model; time-dependent files rejected
     import tempfile
@@ -192,7 +192,7 @@ def test_grav():
 
 
 def test_hessian():
-    # gradient tensor channels (S2A, S2B) against the 40-digit reference values
+    # gradient tensor functionals (S2A, S2B) against the 40-digit reference values
     with open(os.path.join(HERE, "data", "hess_L24_s12.bin"), "rb") as f:
         L, n = (int(v) for v in np.fromfile(f, "<i8", 2))
         a = np.fromfile(f, "<f8", 1)[0]
@@ -200,21 +200,21 @@ def test_hessian():
         r, th, ph = (np.fromfile(f, "<f8", n) for _ in range(3))
         T = np.fromfile(f, "<f8", 6 * n).reshape(6, n)
     l = np.arange(L + 1.0)
-    chans = [potsynth.Channel(3, "P", 0, (l + 1) * (l + 2) / a**2),
-             potsynth.Channel(3, "dP", 0, -(l + 2) / a**2),
-             potsynth.Channel(3, "Psin", 1, -(l + 2) / a**2),
-             potsynth.Channel(3, "S2A", 0, np.full(L + 1, 1 / a**2)),
-             potsynth.Channel(3, "S2B", 1, np.full(L + 1, 1 / a**2))]
-    m = potsynth.Model(coef, 0, L, chans, a)
+    funcs = [potsynth.Functional(3, "P", 0, (l + 1) * (l + 2) / a**2),
+             potsynth.Functional(3, "dP", 0, -(l + 2) / a**2),
+             potsynth.Functional(3, "Psin", 1, -(l + 2) / a**2),
+             potsynth.Functional(3, "S2A", 0, np.full(L + 1, 1 / a**2)),
+             potsynth.Functional(3, "S2B", 1, np.full(L + 1, 1 / a**2))]
+    m = potsynth.Model(coef, 0, L, funcs, a)
     check(m.info["method"] == "direct", "no radial range: direct method")
     Trr, Trt, Trp, D, Ttp = m(r, th, ph)
     Tm = np.array([Trr, Trt, Trp, 0.5 * (-Trr + D), Ttp, 0.5 * (-Trr - D)])
-    check(rel_err(Tm, T) < 1e-13, f"Hessian channels vs reference ({rel_err(Tm, T):.2e})")
+    check(rel_err(Tm, T) < 1e-13, f"Hessian functionals vs reference ({rel_err(Tm, T):.2e})")
     for method, tol in (("direct", 1e-13), ("fast", 1e-11)):
-        m = potsynth.Model(coef, 0, L, chans, a, rmin=1.0, rmax=1.3, method=method, eps=1e-12)
+        m = potsynth.Model(coef, 0, L, funcs, a, rmin=1.0, rmax=1.3, method=method, eps=1e-12)
         Trr, Trt, Trp, D, Ttp = m(r, th, ph)
         Tm = np.array([Trr, Trt, Trp, 0.5 * (-Trr + D), Ttp, 0.5 * (-Trr - D)])
-        check(rel_err(Tm, T) < tol, f"Hessian channels vs reference, {method} ({rel_err(Tm, T):.2e})")
+        check(rel_err(Tm, T) < tol, f"Hessian functionals vs reference, {method} ({rel_err(Tm, T):.2e})")
 
     # front-ends: GravModel "T" is the reference tensor for GM = a = 1
     for method in ("direct", "fast"):
@@ -235,7 +235,7 @@ def test_hessian():
     check(mm.quantities[:3] == ("B_r", "B_theta", "B_phi") and len(mm.quantities) == 9,
           "MagModel B,gradB names")
     check(rel_err(np.array(fm[3:]), -np.array(fg)) < 1e-13, "MagModel gradB = -GravModel T")
-    check(mm.info["nout"] == 9 and mm.info["nchan"] == 8, "MagModel B,gradB info nout/nchan")
+    check(mm.info["nout"] == 9 and mm.info["nfunc"] == 8, "MagModel B,gradB info nout/nfunc")
     Br, Bt, Bp = potsynth.MagModel(gh, lmax=L, a=am, method="direct")(r * am, th, ph)
     check(np.array_equal(Br, fm.B_r) and np.array_equal(Bp, fm.B_phi), "MagModel B unchanged with gradB")
 
@@ -366,14 +366,14 @@ def test_vsh():
 
     # against the generic model: V_r = sum a Y; V_theta = b dP - c Psin d/dphi (Schmidt -> full)
     full = np.concatenate([np.full(2 * l + 1, 1.0 / np.sqrt(2 * l + 1)) for l in range(1, L + 1)])
-    ch = [potsynth.Channel(0, "P"), potsynth.Channel(0, "dP"), potsynth.Channel(0, "Psin", dphi=1)]
+    ch = [potsynth.Functional(0, "P"), potsynth.Functional(0, "dP"), potsynth.Functional(0, "Psin", dphi=1)]
     one = np.ones(N)
     ga = potsynth.Model(a[0] * full, 1, L, ch[:1], 1.0, method="direct")(one, th, ph)
     gb = potsynth.Model(b[0] * full, 1, L, ch[1:], 1.0, method="direct")(one, th, ph)
     gc = potsynth.Model(c[0] * full, 1, L, ch[1:], 1.0, method="direct")(one, th, ph)
     ref = np.array([ga[0], gb[0] - gc[1], gb[1] + gc[0]])
     err = np.max(np.abs(Vd[0, :3] - ref)) / np.max(np.abs(ref))
-    check(err < 1e-13, f"vsh against generic channels: {err:.2e}")
+    check(err < 1e-13, f"vsh against generic functionals: {err:.2e}")
 
     # rows: the same values, point after point
     R = m.rows(None, th, ph)
@@ -571,11 +571,11 @@ def test_sets():
     rr = rng.uniform(6700.0, 6900.0, N)
     coef = rng.normal(size=(2, n)) * 0.9 ** np.arange(n)[None, :]
 
-    # 2 x set 0 - 3 x set 1 under P, and a horizontal vector of the two sets, against channels
+    # 2 x set 0 - 3 x set 1 under P, and a horizontal vector of the two sets, against functionals
     outs = [potsynth.Output([potsynth.Term(0, "P", fac=2.0), potsynth.Term(1, "P", fac=-3.0)], rpow=1),
             potsynth.Output([potsynth.Term(0, "dP"), potsynth.Term(1, "Psin", dphi=1, fac=-1.0)], rpow=1),
             potsynth.Output([potsynth.Term(0, "Psin", dphi=1), potsynth.Term(1, "dP")], rpow=1)]
-    ch = [potsynth.Channel(1, "P"), potsynth.Channel(1, "dP"), potsynth.Channel(1, "Psin", dphi=1)]
+    ch = [potsynth.Functional(1, "P"), potsynth.Functional(1, "dP"), potsynth.Functional(1, "Psin", dphi=1)]
     a = 6371.2
     c0 = potsynth.Model(coef[0], 1, L, ch, a, method="direct")(rr, th, ph)
     c1 = potsynth.Model(coef[1], 1, L, ch, a, method="direct")(rr, th, ph)
@@ -621,6 +621,13 @@ def test_version():
     print(f"  library: {potsynth.library_path}")
 
 
+def test_former_names():
+    # Channel and info["nchan"] are the former names of Functional and info["nfunc"]
+    check(potsynth.Channel is potsynth.Functional, "former name Channel")
+    m = potsynth.MagModel(np.array([0.0, 1.0, 2.0]), lmax=1, quantities="B", method="direct")
+    check(m.info["nchan"] == m.info["nfunc"] == 3, "former name info['nchan']")
+
+
 if __name__ == "__main__":
     test_version()
     test_reference()
@@ -630,5 +637,6 @@ if __name__ == "__main__":
     test_geodesy()
     test_vsh()
     test_sets()
+    test_former_names()
     print("FAILED" if nfail else "all passed")
     sys.exit(1 if nfail else 0)

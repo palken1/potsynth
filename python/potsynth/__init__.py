@@ -12,7 +12,7 @@ potsynth -- fast synthesis of internal potential-field models at scattered point
 This module calls the C library through ctypes (no copies of the input or
 output arrays; the GIL is released during evaluation).
 """
-from .core import (Channel, DomainError, LoadedModel, Model, Output, PotsynthError, Radial, SetsModel, Term,
+from .core import (Channel, Functional, DomainError, LoadedModel, Model, Output, PotsynthError, Radial, SetsModel, Term,
                    coef_vector, idx, nlm, read)
 from .vsh import VshModel
 from .mag import MagModel, ShcModel, read_shc, rtp_to_nec
@@ -25,7 +25,7 @@ __version__ = "0.1.0"
 
 from ._lib import library_path  # noqa: E402  (path of the loaded C library)
 
-__all__ = ["MagModel", "GravModel", "Model", "Channel", "ShcModel", "read_shc", "rtp_to_nec",
+__all__ = ["MagModel", "GravModel", "Model", "Functional", "ShcModel", "read_shc", "rtp_to_nec",
            "GfcModel", "read_gfc", "tensor_matrix", "tensor_rtp_to_nec", "tensor_rtp_to_xyz",
            "Ellipsoid", "WGS84", "GRS80", "geodetic_to_geocentric", "normal_zonals",
            "subtract_normal_field", "normal_gravity", "coef_vector",

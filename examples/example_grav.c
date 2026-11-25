@@ -96,14 +96,14 @@ main(int argc, char * argv[])
   const double rmin = 6378137.0 + 200.0e3;      /* radial range of the points (m) */
   const double rmax = 6378137.0 + 500.0e3;
   const int quantities = POTSYNTH_GRAV_V | POTSYNTH_GRAV_G;
-  const size_t nchan = potsynth_grav_nout(quantities);  /* V, g_r, g_theta, g_phi */
+  const size_t nfunc = potsynth_grav_nout(quantities);  /* V, g_r, g_theta, g_phi */
   const size_t n = 1000000;                     /* number of points */
   const size_t ndirect = 1000;                  /* points compared with the direct sum */
   double * r = malloc(n * sizeof(double));
   double * theta = malloc(n * sizeof(double));
   double * phi = malloc(n * sizeof(double));
-  double * out = malloc(nchan * n * sizeof(double));
-  double * outd = malloc(nchan * ndirect * sizeof(double));
+  double * out = malloc(nfunc * n * sizeof(double));
+  double * outd = malloc(nfunc * ndirect * sizeof(double));
   potsynth_parameters params = potsynth_default_parameters();
   potsynth_gfc * gfc;
   potsynth_workspace * w, * wd;
@@ -172,7 +172,7 @@ main(int argc, char * argv[])
   ewd = potsynth_eval_alloc(0, wd);
   potsynth_eval(ndirect, r, theta, phi, outd, ewd);
 
-  for (c = 0; c < nchan; ++c)
+  for (c = 0; c < nfunc; ++c)
     {
       const char * names[] = { "V", "g_r", "g_theta", "g_phi" };
       double err = 0.0, vmax = 0.0;

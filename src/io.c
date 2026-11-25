@@ -62,7 +62,7 @@ potsynth_write(const char * filename, const potsynth_workspace * w)
     {
       const potsynth_radial_workspace * rad = w->radial_workspace_p;
       const uint64_t bom = IO_BOM;
-      const uint64_t hu[NHEAD_U] = { w->lmin, w->lmax, w->mmax, w->nchan, w->nout, w->nrad, w->ncomp,
+      const uint64_t hu[NHEAD_U] = { w->lmin, w->lmax, w->mmax, w->nfunc, w->nout, w->nrad, w->ncomp,
                                      (uint64_t) w->w, w->nf1, w->nf2, w->nrows, w->ncols, w->nch, w->nchp,
                                      rad->rho, rad->ncheb, (w->omap != NULL) };
       const int64_t hi[NHEAD_I] = { w->row_lo, w->row_hi, w->col_lo, w->col_hi };
@@ -85,7 +85,7 @@ potsynth_write(const char * filename, const potsynth_workspace * w)
       ok = ok && (fwrite(rad->basis, sizeof(double), rad->rho * rad->ncheb, fp) == rad->rho * rad->ncheb);
 
       if (w->omap != NULL)
-        ok = ok && (fwrite(w->omap, sizeof(double), w->nout * w->nchan, fp) == w->nout * w->nchan);
+        ok = ok && (fwrite(w->omap, sizeof(double), w->nout * w->nfunc, fp) == w->nout * w->nfunc);
 
       ok = ok && (fwrite(w->grid, sizeof(double), ngrid, fp) == ngrid);
       ok = (fclose(fp) == 0) && ok;
@@ -185,7 +185,7 @@ potsynth_read(const char * filename, const potsynth_radial * radial, const int n
   w->lmin = (size_t) hu[0];
   w->lmax = (size_t) hu[1];
   w->mmax = (size_t) hu[2];
-  w->nchan = (size_t) hu[3];
+  w->nfunc = (size_t) hu[3];
   w->nout = (size_t) hu[4];
   w->nrad = (size_t) hu[5];
   w->ncomp = (size_t) hu[6];
@@ -234,12 +234,12 @@ potsynth_read(const char * filename, const potsynth_radial * radial, const int n
    * products must not overflow, the window must fit in the stored rows and columns
    * (window_origin() clamps to them), and a model with radial functions of the caller
    * has one layer per function */
-  ok = (w->nchan > 0 && rad->rho > 0 && rad->ncheb > 0 && w->lmin <= w->lmax && w->mmax <= w->lmax &&
+  ok = (w->nfunc > 0 && rad->rho > 0 && rad->ncheb > 0 && w->lmin <= w->lmax && w->mmax <= w->lmax &&
         io_mul(rad->rho, rad->ncheb, &nbasis) && io_mul(nbasis, sizeof(double), &nbytes) &&
         io_mul(w->nrows, w->ncols, &ngrid) && io_mul(ngrid, w->nchp, &ngrid) &&
         io_mul(ngrid, sizeof(double), &nbytes) &&
-        io_mul(w->nchan, rad->rho, &nbytes) && w->nch == nbytes &&
-        io_mul(w->nout, w->nchan, &nbytes) && io_mul(nbytes, sizeof(double), &nbytes) &&
+        io_mul(w->nfunc, rad->rho, &nbytes) && w->nch == nbytes &&
+        io_mul(w->nout, w->nfunc, &nbytes) && io_mul(nbytes, sizeof(double), &nbytes) &&
         w->nchp >= w->nch && w->nchp % POTSYNTH_CHAN_ALIGN == 0 && w->w >= 2 && w->w <= 32 &&
         labs(w->row_lo) < IO_MAXIDX && labs(w->row_hi) < IO_MAXIDX &&
         labs(w->col_lo) < IO_MAXIDX && labs(w->col_hi) < IO_MAXIDX &&
@@ -248,20 +248,20 @@ potsynth_read(const char * filename, const potsynth_radial * radial, const int n
         w->nrows >= (size_t) w->w && w->ncols >= (size_t) w->w &&
         isfinite(w->inv_h1) && isfinite(w->inv_h2) && isfinite(w->half) &&
         (w->nrad == 0 || (rad->rho == w->nrad && rad->ncheb == 1)) &&
-        w->nout >= w->nchan && w->nout <= 2 * w->nchan &&
-        (hu[16] || w->nout == w->nchan));
+        w->nout >= w->nfunc && w->nout <= 2 * w->nfunc &&
+        (hu[16] || w->nout == w->nfunc));
 
   if (ok)
     {
       rad->basis = potsynth_aligned_calloc(nbasis * sizeof(double));
       w->grid = potsynth_aligned_calloc(ngrid * sizeof(double));
       if (hu[16])
-        w->omap = malloc(w->nout * w->nchan * sizeof(double));
+        w->omap = malloc(w->nout * w->nfunc * sizeof(double));
 
       ok = (rad->basis != NULL && w->grid != NULL && (!hu[16] || w->omap != NULL));
       ok = ok && (fread(rad->basis, sizeof(double), nbasis, fp) == nbasis);
       if (ok && hu[16])
-        ok = (fread(w->omap, sizeof(double), w->nout * w->nchan, fp) == w->nout * w->nchan);
+        ok = (fread(w->omap, sizeof(double), w->nout * w->nfunc, fp) == w->nout * w->nfunc);
       ok = ok && (fread(w->grid, sizeof(double), ngrid, fp) == ngrid);
     }
 

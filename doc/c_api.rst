@@ -6,7 +6,7 @@ C API
 
 There are four headers:
 
-- ``potsynth.h``: the generic core, with channels of an internal potential.
+- ``potsynth.h``: the generic core, with functionals of an internal potential.
 - ``potsynth_mag.h``: the magnetic front-end. It includes ``potsynth.h``.
 - ``potsynth_grav.h``: the gravity front-end. It includes ``potsynth.h``.
 - ``potsynth_vsh.h``: the vector spherical harmonic front-end, for vector fields that
@@ -147,8 +147,8 @@ Parameters
 
    .. c:member:: double eps
 
-      Requested accuracy, relative to the largest magnitude of each quantity: scalar
-      channels (:math:`V`, :math:`B_r`, :math:`g_r`, :math:`T_{rr}`) relative to their own
+      Requested accuracy, relative to the largest magnitude of each irreducible component: scalar
+      functionals (:math:`V`, :math:`B_r`, :math:`g_r`, :math:`T_{rr}`) relative to their own
       maximum, horizontal components relative to the maximum of the horizontal vector
       (e.g. :math:`B_\theta` and :math:`B_\phi` relative to :math:`\max|\mathbf{B}_h|`), see
       :ref:`accuracy`. Default :math:`10^{-10}`. Any value from about :math:`10^{-4}` down to
@@ -233,7 +233,7 @@ Magnetic front-end
    components :math:`\partial B_{rr}, \partial B_{r\theta}, \partial B_{r\phi},
    \partial B_{\theta\theta}, \partial B_{\theta\phi}, \partial B_{\phi\phi}` in the
    spherical basis (see :ref:`gradient-tensor`). The tensor is symmetric and traceless;
-   it is computed from five channels.
+   it is computed from five functionals.
 
 The flags are combined with ``|``. The outputs are in the order :math:`B_r, B_\theta,
 B_\phi`, then the six tensor components, restricted to those requested. At the poles,
@@ -372,11 +372,11 @@ set-up.
    The gravity gradient tensor :math:`T = \nabla\nabla V` (s\ :sup:`-2`;
    :math:`1\ \mathrm{E} = 10^{-9}` s\ :sup:`-2`), as six components :math:`T_{rr},
    T_{r\theta}, T_{r\phi}, T_{\theta\theta}, T_{\theta\phi}, T_{\phi\phi}` in the
-   spherical basis (see :ref:`gradient-tensor`), computed from five channels.
+   spherical basis (see :ref:`gradient-tensor`), computed from five functionals.
 
 The flags are combined with ``|``. The outputs are in the order :math:`V, g_r,
 g_\theta, g_\phi`, then the six tensor components, restricted to those requested. Each
-channel adds to the set-up time and grid memory of the fast method, so request only
+functional adds to the set-up time and grid memory of the fast method, so request only
 what is needed: for example :c:macro:`POTSYNTH_GRAV_GR` alone for radial gravity.
 
 .. c:function:: potsynth_workspace * potsynth_grav_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const double * coef, const double GM, const double a, const double rmin, const double rmax, const int quantities, const potsynth_parameters * params)
@@ -398,10 +398,10 @@ what is needed: for example :c:macro:`POTSYNTH_GRAV_GR` alone for radial gravity
    :param params: parameters, or ``NULL`` for the defaults
    :returns: the workspace, or ``NULL`` on error (reported to the error handler)
 
-   The accuracy :c:member:`potsynth_parameters.eps` applies to each quantity
+   The accuracy :c:member:`potsynth_parameters.eps` applies to each irreducible component
    separately (:math:`V`, :math:`g_r`, the horizontal acceleration
    :math:`(g_\theta, g_\phi)`, and the three parts of the tensor; see :ref:`accuracy`).
-   For a full model, each quantity is dominated by its central
+   For a full model, each of them is dominated by its central
    (:math:`l = 0`) term; for :math:`10^{-10}` the potential is accurate to about
    :math:`10^{-3}` m\ :sup:`2`/s\ :sup:`2` (0.1 mm of geoid height) and
    :math:`g_r` to about :math:`2 \times 10^{-5}` mGal, measured with EGM2008 at satellite
@@ -559,9 +559,10 @@ the published WGS84 and GRS80 values.
 Generic core
 ============
 
-.. c:struct:: potsynth_channel
+.. c:struct:: potsynth_functional
 
-   One output quantity, as in :eq:`channel`.
+   One functional, as in :eq:`functional`.
+   ``potsynth_channel`` is its former name, kept as a deprecated alias.
 
    .. c:member:: int rpow
 
@@ -613,7 +614,7 @@ Both methods support all operators.
 The front-ends provide the gradient tensor directly (:c:macro:`POTSYNTH_MAG_GRADB`,
 :c:macro:`POTSYNTH_GRAV_T`). For other potentials, the gradient tensor
 :math:`T = \nabla\nabla V` of
-:math:`V = \sum (a/r)^{l+1} \bar{P}_l^m [\ldots]` is given by five channels, all with
+:math:`V = \sum (a/r)^{l+1} \bar{P}_l^m [\ldots]` is given by five functionals, all with
 ``rpow = 3``:
 
 .. list-table::
@@ -646,15 +647,15 @@ The front-ends provide the gradient tensor directly (:c:macro:`POTSYNTH_MAG_GRAD
 
 with :math:`T_{\theta\theta} = (-T_{rr} + D)/2` and :math:`T_{\phi\phi} = (-T_{rr} - D)/2`.
 
-.. c:function:: potsynth_workspace * potsynth_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const double * coef, const double a, const double rmin, const double rmax, const size_t nchan, const potsynth_channel * chan, const potsynth_parameters * params)
+.. c:function:: potsynth_workspace * potsynth_alloc(const size_t lmin, const size_t lmax, const size_t mmax, const double * coef, const double a, const double rmin, const double rmax, const size_t nfunc, const potsynth_functional * chan, const potsynth_parameters * params)
 
-   Builds a model with user-defined channels.
+   Builds a model with user-defined functionals.
 
    ``coef`` holds the 4-:math:`\pi` fully normalized coefficients, indexed by
    :c:macro:`potsynth_idx`. ``lmin`` may be 0. The remaining arguments are as for
    :c:func:`potsynth_mag_alloc`. All arrays are copied.
 
-   For example, the magnetic front-end is equivalent to the three channels
+   For example, the magnetic front-end is equivalent to the three functionals
    ``{2, rfac=l+1, THETA_P, 0}``, ``{2, rfac=-1, THETA_DP, 0}`` and
    ``{2, rfac=-1, THETA_PSIN, 1}``, with ``coef = gh / sqrt(2l+1)``.
 
@@ -1022,7 +1023,7 @@ Evaluation
       valid.
    :param phi: longitude in radians; any finite value
    :param out: output array of ``nout * n`` doubles, output-major: ``out[k*n + i]``.
-      ``nout`` is the number of channels, or, for the front-ends, the number of
+      ``nout`` is the number of functionals, or, for the front-ends, the number of
       requested outputs (see :c:func:`potsynth_mag_nout`, :c:func:`potsynth_grav_nout`
       and ``nout`` in :c:struct:`potsynth_info`).
    :param ew: evaluation workspace
@@ -1122,10 +1123,10 @@ Introspection
 
    The parameters chosen during set-up. Its members are:
 
-   - ``lmin``, ``lmax``, ``mmax``, ``nchan``;
+   - ``lmin``, ``lmax``, ``mmax``, ``nfunc``;
    - ``nout``, the number of outputs per point written by :c:func:`potsynth_eval`. It
-     equals ``nchan``, except for front-end gradient tensors, whose six components are
-     computed from five channels;
+     equals ``nfunc``, except for front-end gradient tensors, whose six components are
+     computed from five functionals;
    - ``method``, the method actually selected;
    - ``w`` and ``sigma``;
    - ``rho``, the radial rank;
@@ -1133,7 +1134,7 @@ Introspection
    - ``nf1``, ``nf2``, the fine grid size;
    - ``nrows``, the number of stored rows;
    - ``grid_bytes``;
-   - ``ncomp``, the number of field components (the quantities ``eps`` is relative to);
+   - ``ncomp``, the number of irreducible components (``eps`` is relative to each);
    - ``err_radial``, the bound of the error of the radial basis over the shell, relative
      to the size of each component. It is at most ``rank_tol`` (default ``eps/2``) unless
      the tolerance is below the double-precision floor of the bound (about

@@ -7,7 +7,7 @@
  *                    [ g_l^m cos(m phi) + h_l^m sin(m phi) ] P_l^m(cos theta)
  *
  * with Schmidt semi-normalized P_l^m, and B = -grad V. The front-end converts
- * the Gauss coefficients to the core normalization and defines the channels
+ * the Gauss coefficients to the core normalization and defines the functionals
  * of the requested quantities: the field (B_r, B_theta, B_phi) and/or its
  * gradient tensor grad B = -grad grad V.
  *

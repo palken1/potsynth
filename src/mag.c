@@ -11,8 +11,8 @@
  * Schmidt P_l^m = Pbar_l^m / sqrt(2l+1) (4-pi normalized), so the core
  * coefficients are C_lm = g_l^m / sqrt(2l+1), S_lm = h_l^m / sqrt(2l+1).
  *
- * The gradient tensor grad B = -grad grad V uses the five tensor channels of
- * potsynth_tensor_channels() with scale -1/a (V = a sum (a/r)^(l+1) ...), and
+ * The gradient tensor grad B = -grad grad V uses the five tensor functionals of
+ * potsynth_tensor_functionals() with scale -1/a (V = a sum (a/r)^(l+1) ...), and
  * an output map giving its six components.
  *
  * Copyright (C) 2026 Patrick Alken and Johnathan Burchill, BSD 3-Clause License
@@ -67,7 +67,7 @@ dB_rr, dB_rt, dB_rp, dB_tt, dB_tp, dB_pp (nT/km), out[k*n + i]. All are
 finite and correct at the poles (the theta and phi components there refer to
 the local frame defined by phi)
 
-2) The tensor is symmetric and traceless; it is computed from five channels
+2) The tensor is symmetric and traceless; it is computed from five functionals
 */
 
 potsynth_workspace *
@@ -79,10 +79,10 @@ potsynth_mag_alloc(const size_t lmin, const size_t lmax, const size_t mmax, cons
   const size_t nout = potsynth_mag_nout(quantities);
   const int wantB = (quantities & POTSYNTH_MAG_B) != 0;
   const int wantT = (quantities & POTSYNTH_MAG_GRADB) != 0;
-  potsynth_channel chan[8];
+  potsynth_functional func[8];
   potsynth_workspace * w;
   double * coef, * rfac;
-  size_t l, m, nchan = 0;
+  size_t l, m, nfunc = 0;
 
   if (nout == 0)
     {
@@ -151,34 +151,34 @@ potsynth_mag_alloc(const size_t lmin, const size_t lmax, const size_t mmax, cons
         }
 
       /* B_r */
-      chan[0].rpow = 2;
-      chan[0].rfac = rfac_r;
-      chan[0].theta = POTSYNTH_THETA_P;
-      chan[0].dphi = 0;
+      func[0].rpow = 2;
+      func[0].rfac = rfac_r;
+      func[0].theta = POTSYNTH_THETA_P;
+      func[0].dphi = 0;
 
       /* B_theta */
-      chan[1].rpow = 2;
-      chan[1].rfac = rfac_m;
-      chan[1].theta = POTSYNTH_THETA_DP;
-      chan[1].dphi = 0;
+      func[1].rpow = 2;
+      func[1].rfac = rfac_m;
+      func[1].theta = POTSYNTH_THETA_DP;
+      func[1].dphi = 0;
 
       /* B_phi */
-      chan[2].rpow = 2;
-      chan[2].rfac = rfac_m;
-      chan[2].theta = POTSYNTH_THETA_PSIN;
-      chan[2].dphi = 1;
+      func[2].rpow = 2;
+      func[2].rfac = rfac_m;
+      func[2].theta = POTSYNTH_THETA_PSIN;
+      func[2].dphi = 1;
 
-      nchan = 3;
+      nfunc = 3;
     }
 
   /* grad B = -grad grad V, V = a sum (a/r)^(l+1) ...: scale -a/a^2 */
   if (wantT)
     {
-      potsynth_tensor_channels(lmax, -1.0 / a, chan + nchan, rfac);
-      nchan += 5;
+      potsynth_tensor_functionals(lmax, -1.0 / a, func + nfunc, rfac);
+      nfunc += 5;
     }
 
-  w = potsynth_alloc(lmin, lmax, mmax, coef, a, rmin, rmax, nchan, chan, params);
+  w = potsynth_alloc(lmin, lmax, mmax, coef, a, rmin, rmax, nfunc, func, params);
 
   free(coef);
   free(rfac);
@@ -190,12 +190,12 @@ potsynth_mag_alloc(const size_t lmin, const size_t lmax, const size_t mmax, cons
 
       if (wantB)
         {
-          map[0 * nchan + 0] = 1.0;
-          map[1 * nchan + 1] = 1.0;
-          map[2 * nchan + 2] = 1.0;
+          map[0 * nfunc + 0] = 1.0;
+          map[1 * nfunc + 1] = 1.0;
+          map[2 * nfunc + 2] = 1.0;
         }
 
-      potsynth_tensor_map(nchan, wantB ? 3 : 0, map + (wantB ? 3 : 0) * nchan);
+      potsynth_tensor_map(nfunc, wantB ? 3 : 0, map + (wantB ? 3 : 0) * nfunc);
 
       status = potsynth_set_outputs(w, nout, map);
       if (status)
@@ -214,7 +214,7 @@ potsynth_mag_rtp2nec()
 (B_north, B_east, B_center) = (-B_theta, B_phi, -B_r)
 
 Inputs: n - number of points
-        B - field, channel-major as output by potsynth_eval(), length 3*n
+        B - field, functional-major as output by potsynth_eval(), length 3*n
 */
 
 void

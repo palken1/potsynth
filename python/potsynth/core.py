@@ -1,5 +1,5 @@
 """
-Generic potential-field synthesis: channels of an internal potential.
+Generic potential-field synthesis: functionals of an internal potential.
 """
 import ctypes
 import os
@@ -95,8 +95,8 @@ def coef_vector(C, S, lmin=None, lmax=None, mmax=None):
 
 
 @dataclass
-class Channel:
-    """One output quantity of the core model,
+class Functional:
+    """One functional of the core model,
 
         f(r, theta, phi) = sum_{l,m} rfac[l] (a/r)^(l + rpow) T[Pbar_l^m(cos theta)]
                                      (d/dphi)^dphi [C_lm cos(m phi) + S_lm sin(m phi)]
@@ -133,6 +133,9 @@ OPTIONS_DOC = """
           the range needs; points outside of it raise DomainError
 """
 
+
+
+Channel = Functional  # former name (deprecated)
 
 def _options(options):
     """C parameters and chunk size from the keyword options of a model"""
@@ -299,11 +302,11 @@ class Radial:
 
 
 class _Evaluator:
-    """Owns a C workspace and an evaluation workspace; evaluates its channels."""
+    """Owns a C workspace and an evaluation workspace; evaluates its functionals."""
 
-    def __init__(self, ptr, nchan, chunk, needs_r=True):
+    def __init__(self, ptr, nfunc, chunk, needs_r=True):
         self._ptr = ptr
-        self._nchan = nchan
+        self._nfunc = nfunc
         self._needs_r = needs_r
         _lib.clear_error()
         self._ew = lib.potsynth_eval_alloc(chunk, ptr)
@@ -338,7 +341,7 @@ class _Evaluator:
     def _evaluate(self, r, theta, phi, rows=False):
         r, theta, phi, shape = self._points(r, theta, phi)
         n = theta.size
-        out = np.empty((n, self._nchan) if rows else (self._nchan, n))
+        out = np.empty((n, self._nfunc) if rows else (self._nfunc, n))
         ptr = lambda a: None if a is None else a.ctypes.data_as(_lib.c_double_p)
         fn = lib.potsynth_eval_rows if rows else lib.potsynth_eval
         radial = getattr(self, "_radial", None)
@@ -348,7 +351,7 @@ class _Evaluator:
             status = fn(n, ptr(r), ptr(theta), ptr(phi), ptr(out), self._ew)
         if status:
             _raise_radial(radial, status, "potsynth_eval_rows" if rows else "potsynth_eval")
-        return out.reshape(shape + (self._nchan,) if rows else (self._nchan,) + shape)
+        return out.reshape(shape + (self._nfunc,) if rows else (self._nfunc,) + shape)
 
     def rows(self, r, theta, phi):
         """Evaluate with the outputs of a point next to each other: an array of shape
@@ -373,6 +376,7 @@ class _Evaluator:
         i = _lib.Info_t()
         lib.potsynth_get_info(ctypes.byref(i), self._ptr)
         d = {name: getattr(i, name) for name, _ in _lib.Info_t._fields_}
+        d["nchan"] = d["nfunc"]          # former name (deprecated)
         d["method"] = _METHOD_NAMES.get(d["method"], d["method"])
         return d
 
@@ -406,40 +410,40 @@ def read(filename, radial=None, nthreads=0):
 
 
 class Model(_Evaluator):
-    """Generic internal potential-field model with user-defined channels.
+    """Generic internal potential-field model with user-defined functionals.
 
     Parameters
     ----------
     coef : 1-D array, 4-pi fully normalised coefficients in the layout of idx()
            (see coef_vector()), length nlm(lmin, lmax, mmax)
     lmin, lmax, mmax : degree range and maximum order (mmax defaults to lmax)
-    channels : list of Channel
+    functionals : list of Functional
     a : reference radius (same unit as r)
     rmin, rmax : radial range of the evaluation points (required by the fast method)
     """ + OPTIONS_DOC + """
     Calling the model with (r, theta, phi) returns an array of shape
-    (len(channels),) + broadcast shape of the inputs; rows(r, theta, phi) returns the
-    same values with shape (broadcast shape) + (len(channels),).
+    (len(functionals),) + broadcast shape of the inputs; rows(r, theta, phi) returns the
+    same values with shape (broadcast shape) + (len(functionals),).
     """
 
-    def __init__(self, coef, lmin, lmax, channels, a, rmin=0.0, rmax=0.0, mmax=None, **options):
+    def __init__(self, coef, lmin, lmax, functionals, a, rmin=0.0, rmax=0.0, mmax=None, **options):
         coef, lmax, mmax = _coefficients(coef, lmin, lmax, mmax)
         p, chunk = _options(options)
 
-        chans = (_lib.Channel_t * len(channels))()
+        funcs = (_lib.Functional_t * len(functionals))()
         self._rfac = []
-        for i, ch in enumerate(channels):
-            chans[i].rpow = ch.rpow
-            chans[i].theta = _THETA_OPS[ch.theta]
-            chans[i].dphi = ch.dphi
-            chans[i].rfac = _rfac(ch.rfac, lmax, self._rfac, "Channel")
+        for i, ch in enumerate(functionals):
+            funcs[i].rpow = ch.rpow
+            funcs[i].theta = _THETA_OPS[ch.theta]
+            funcs[i].dphi = ch.dphi
+            funcs[i].rfac = _rfac(ch.rfac, lmax, self._rfac, "Functional")
 
         _lib.clear_error()
         ptr = lib.potsynth_alloc(lmin, lmax, mmax, coef.ctypes.data_as(_lib.c_double_p), a,
-                                 rmin, rmax, len(channels), chans, ctypes.byref(p))
+                                 rmin, rmax, len(functionals), funcs, ctypes.byref(p))
         if not ptr:
             _raise(_lib.POTSYNTH_EINVAL, "potsynth_alloc")
-        super().__init__(ptr, len(channels), chunk)
+        super().__init__(ptr, len(functionals), chunk)
 
     def __call__(self, r, theta, phi):
         return self._evaluate(r, theta, phi)
@@ -453,7 +457,7 @@ class Term:
 
     with the coefficients C, S of the coefficient set `set` (with radial functions: of
     the sets set, set + 1, ..., one for each radial function). theta and rfac as for
-    Channel.
+    Functional.
     """
     set: int
     theta: str = "P"

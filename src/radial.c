@@ -47,27 +47,27 @@ static void radial_state_free(radial_state_t * state);
 static int radial_state_resize(const size_t K, radial_state_t * state);
 static void cheb_coeffs(const size_t K, const double * f, const double * ct, double * a);
 static double radial_sample(const double uc, const double ud, radial_state_t * state);
-static int radial_build(const size_t lmin, const size_t lmax, const size_t nchan, const int * rpow,
+static int radial_build(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
                         const double * wn, const double tol, const int maxpow, const size_t kmin,
                         const double rtol, potsynth_radial_workspace * w, radial_state_t * state);
-static double radial_direct_check(const size_t lmin, const size_t lmax, const size_t nchan, const int * rpow,
+static double radial_direct_check(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
                                   const double * wn, const potsynth_radial_workspace * w);
-static int radial_rank_check(const size_t lmin, const size_t lmax, const size_t nchan, const int * rpow,
+static int radial_rank_check(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
                              const double * wn, const double tol, const radial_state_t * state,
                              size_t * rho);
 
 /*
 potsynth_radial_alloc()
-  Compute the optimal radial basis for a set of channels
+  Compute the optimal radial basis for a set of functionals
 
 Inputs: u0    - a / rmax
         u1    - a / rmin
         lmin  - minimum SH degree
         lmax  - maximum SH degree
-        nchan - number of channels
-        rpow  - radial power offset of each channel, length nchan
+        nfunc - number of functionals
+        rpow  - radial power offset of each functional, length nfunc
         wn    - weights wn[c*(lmax+1) + l]: size of the contribution of degree l
-                to channel c (0 = absent)
+                to functional c (0 = absent)
         tol   - relative tolerance of the rank truncation
 
 Return: pointer to workspace
@@ -79,7 +79,7 @@ constant basis function b_0 = 1 is used
 
 potsynth_radial_workspace *
 potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const size_t lmax,
-                      const size_t nchan, const int * rpow, const double * wn, const double tol)
+                      const size_t nfunc, const int * rpow, const double * wn, const double tol)
 {
   const size_t L1 = lmax + 1;
   int maxpow = rpow[0], minpow = rpow[0];
@@ -88,7 +88,7 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
   size_t c, l;
   int status;
 
-  for (c = 1; c < nchan; ++c)
+  for (c = 1; c < nfunc; ++c)
     {
       maxpow = (rpow[c] > maxpow) ? rpow[c] : maxpow;
       minpow = (rpow[c] < minpow) ? rpow[c] : minpow;
@@ -120,7 +120,7 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
       w->ud = 0.0;
       w->err = 0.0;
       w->basis = potsynth_aligned_alloc(sizeof(double));
-      w->beta = potsynth_aligned_calloc(nchan * L1 * sizeof(double));
+      w->beta = potsynth_aligned_calloc(nfunc * L1 * sizeof(double));
       if (!w->basis || !w->beta)
         {
           potsynth_radial_free(w);
@@ -128,7 +128,7 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
         }
 
       w->basis[0] = 1.0;
-      for (c = 0; c < nchan; ++c)
+      for (c = 0; c < nfunc; ++c)
         {
           for (l = lmin; l <= lmax; ++l)
             w->beta[c * L1 + l] = pow(w->uc, (double) l + rpow[c]);
@@ -152,7 +152,7 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
         size_t Kused;
 
         memset(&state, 0, sizeof(radial_state_t));
-        status = radial_build(lmin, lmax, nchan, rpow, wn, tol, maxpow, kmin, rtol, w, &state);
+        status = radial_build(lmin, lmax, nfunc, rpow, wn, tol, maxpow, kmin, rtol, w, &state);
         Kused = state.K;
         radial_state_free(&state);
 
@@ -162,7 +162,7 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
             return NULL;
           }
 
-        ratio = radial_direct_check(lmin, lmax, nchan, rpow, wn, w);
+        ratio = radial_direct_check(lmin, lmax, nfunc, rpow, wn, w);
         w->err = ratio;
 
         if (ratio <= tol || ratio > 0.5 * prev)
@@ -190,7 +190,7 @@ there is nothing to expand: all coefficients beta are 1
 
 Inputs: nrad  - number of radial functions
         lmax  - maximum degree
-        nchan - number of channels
+        nfunc - number of functionals
 
 Return: pointer to workspace, or NULL on error
 
@@ -200,9 +200,9 @@ rank the nodes of the window check
 */
 
 potsynth_radial_workspace *
-potsynth_radial_alloc_caller(const size_t nrad, const size_t lmax, const size_t nchan)
+potsynth_radial_alloc_caller(const size_t nrad, const size_t lmax, const size_t nfunc)
 {
-  const size_t nbeta = nchan * nrad * (lmax + 1);
+  const size_t nbeta = nfunc * nrad * (lmax + 1);
   potsynth_radial_workspace * w;
   size_t i;
 
@@ -546,8 +546,8 @@ radial_build()
 
 Inputs: lmin   - minimum SH degree
         lmax   - maximum SH degree
-        nchan  - number of channels
-        rpow   - radial power offsets, length nchan
+        nfunc  - number of functionals
+        rpow   - radial power offsets, length nfunc
         wn     - weights, wn[c*(lmax+1) + l]
         tol    - truncation tolerance
         maxpow - largest rpow
@@ -556,7 +556,7 @@ Inputs: lmin   - minimum SH degree
 */
 
 static int
-radial_build(const size_t lmin, const size_t lmax, const size_t nchan, const int * rpow,
+radial_build(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
              const double * wn, const double tol, const int maxpow, const size_t kmin,
              const double rtol, potsynth_radial_workspace * w, radial_state_t * state)
 {
@@ -567,15 +567,15 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nchan, const int
   int status;
 
   /* weighted functions w * u^(l+rpow): one per (distinct rpow, l), with the
-   * largest weight over the channels sharing that rpow */
-  state->fpow = malloc(nchan * L1 * sizeof(int));
-  state->fw = malloc(nchan * L1 * sizeof(double));
+   * largest weight over the functionals sharing that rpow */
+  state->fpow = malloc(nfunc * L1 * sizeof(int));
+  state->fw = malloc(nfunc * L1 * sizeof(double));
   if (!state->fpow || !state->fw)
     {
       POTSYNTH_ERROR ("unable to allocate radial functions", POTSYNTH_ENOMEM);
     }
 
-  for (c = 0; c < nchan; ++c)
+  for (c = 0; c < nfunc; ++c)
     {
       size_t c2;
       int seen = 0;
@@ -593,7 +593,7 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nchan, const int
         {
           double wmax = 0.0;
 
-          for (c2 = c; c2 < nchan; ++c2)
+          for (c2 = c; c2 < nfunc; ++c2)
             {
               if (rpow[c2] == rpow[c])
                 wmax = fmax(wmax, wn[c2 * L1 + l]);
@@ -723,15 +723,15 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nchan, const int
   if (rho == 0)
     rho = 1;
 
-  /* the rank above bounds the error of all quantities together; raise it until
-   * each quantity's own error is within tol */
-  status = radial_rank_check(lmin, lmax, nchan, rpow, wn, rtol, state, &rho);
+  /* the rank above bounds the error of all components together; raise it until
+   * each component's own error is within tol */
+  status = radial_rank_check(lmin, lmax, nfunc, rpow, wn, rtol, state, &rho);
   if (status)
     return status;
 
   /* basis functions b_i(u_j) = U_ji / sqrt(c_j), U_ji = V[i*(K+1) + j] */
   w->basis = potsynth_aligned_calloc(rho * (K + 1) * sizeof(double));
-  w->beta = potsynth_aligned_calloc(nchan * rho * L1 * sizeof(double));
+  w->beta = potsynth_aligned_calloc(nfunc * rho * L1 * sizeof(double));
   if (!w->basis || !w->beta)
     {
       POTSYNTH_ERROR ("unable to allocate radial basis", POTSYNTH_ENOMEM);
@@ -771,7 +771,7 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nchan, const int
   w->ncheb = ncheb;
 
   /* beta_{c,i,l} = sum_j U_ji sqrt(c_j) u_j^(l+rpow_c) (Chebyshev-weighted projection) */
-  for (c = 0; c < nchan; ++c)
+  for (c = 0; c < nfunc; ++c)
     {
       for (i = 0; i < rho; ++i)
         {
@@ -792,32 +792,32 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nchan, const int
 
 /*
 radial_rank_check()
-  Smallest rank, at least *rho, at which the radial error of each quantity is
+  Smallest rank, at least *rho, at which the radial error of each component is
 within tol of its own size
 
 Inputs: lmin   - minimum SH degree
         lmax   - maximum SH degree
-        nchan  - number of channels
-        rpow   - radial power offsets, length nchan
+        nfunc  - number of functionals
+        rpow   - radial power offsets, length nfunc
         wn     - weights, wn[c*(lmax+1) + l]
         tol    - truncation tolerance
         state  - state after the SVD (nodes, Lobatto weights, V)
         rho    - (input/output) rank
 
 Notes:
-1) A quantity is a set of channels with the same radial power and weights.
+1) An irreducible component is a set of functionals with the same radial power and weights.
 By the addition theorem (also for spin-weighted harmonics), a degree-l part
 with rms wn_l over the sphere is at most sqrt(2l+1) wn_l anywhere on it, so
-the error of the quantity at node u_j is at most
+the error of the component at node u_j is at most
 B(u_j) = sum_l sqrt(2l+1) wn_l |e_l(u_j)|, with e_l the residual of u^(l+rpow)
 after projection onto the first rho basis functions, at every point of the
 sphere and in any coordinate system. Its rms at u_j is
 F(u_j) = (sum_l wn_l^2 u_j^(2(l+rpow)))^(1/2), at most its largest magnitude.
 The rank is raised until max_j B(u_j) <= tol * max_j F(u_j) for every
-quantity: the worst point of the shell, relative to the largest rms size of
-the quantity in the shell.
+component: the worst point of the shell, relative to the largest rms size of
+the component in the shell.
 2) The singular value rule bounds only the error of all functions together,
-weighted by the largest weight over the quantities, so a quantity much smaller
+weighted by the largest weight over the components, so a component much smaller
 than the others at high degree (e.g. the horizontal gravity gradients) can
 exceed it.
 3) tol is floored at 16 DBL_EPSILON, below which the residuals are rounding.
@@ -828,7 +828,7 @@ times per rank, rounding does not).
 */
 
 static int
-radial_rank_check(const size_t lmin, const size_t lmax, const size_t nchan, const int * rpow,
+radial_rank_check(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
                   const double * wn, const double tol, const radial_state_t * state,
                   size_t * rho)
 {
@@ -850,7 +850,7 @@ radial_rank_check(const size_t lmin, const size_t lmax, const size_t nchan, cons
       POTSYNTH_ERROR ("unable to allocate rank check arrays", POTSYNTH_ENOMEM);
     }
 
-  for (c = 0; c < nchan; ++c)
+  for (c = 0; c < nfunc; ++c)
     {
       const double * wc = wn + c * L1;
       double fmax2 = 0.0, floor2 = 0.0;
@@ -864,7 +864,7 @@ radial_rank_check(const size_t lmin, const size_t lmax, const size_t nchan, cons
         }
 
       if (seen)
-        continue; /* same quantity as an earlier channel */
+        continue; /* same component as an earlier functional */
 
       memset(err1, 0, (K1 + 1) * K1 * sizeof(double));
       memset(sum1, 0, K1 * sizeof(double));
@@ -968,21 +968,21 @@ radial_rank_check(const size_t lmin, const size_t lmax, const size_t nchan, cons
 
 /*
 radial_direct_check()
-  Largest pointwise bound of the radial error of any quantity on a fine set of
-radii, relative to the quantity's largest rms size in the shell
+  Largest pointwise bound of the radial error of any component on a fine set of
+radii, relative to the component's largest rms size in the shell
 
 Notes:
 1) By the addition theorem a degree-l part with rms w_l over the sphere is at
-most sqrt(2l+1) w_l anywhere, so the radial error of a quantity at u is at most
+most sqrt(2l+1) w_l anywhere, so the radial error of a component at u is at most
 B(u) = sum_l sqrt(2l+1) w_l |u^(l+p) - sum_i beta_il b_i(u)|. B is evaluated with
 the final basis (Chebyshev series as used at evaluation) at 8 ncheb + 1 points
 of the shell, so it includes the error between the SVD nodes.
 2) The size is F = max_u (sum_l w_l^2 u^(2(l+p)))^(1/2), at most the largest
-magnitude of the quantity in the shell.
+magnitude of the component in the shell.
 */
 
 static double
-radial_direct_check(const size_t lmin, const size_t lmax, const size_t nchan, const int * rpow,
+radial_direct_check(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
                     const double * wn, const potsynth_radial_workspace * w)
 {
   const size_t L1 = lmax + 1;
@@ -1019,7 +1019,7 @@ radial_direct_check(const size_t lmin, const size_t lmax, const size_t nchan, co
         }
     }
 
-  for (c = 0; c < nchan; ++c)
+  for (c = 0; c < nfunc; ++c)
     {
       const double * wc = wn + c * L1;
       double bmax = 0.0, fmax2 = 0.0;

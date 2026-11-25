@@ -6,6 +6,14 @@ between minor versions.
 
 ## 0.1.0 (unreleased)
 
+Terminology as in the paper (Alken and Burchill): a *functional* (formerly *channel*) is
+one linear functional of the potential requested from the core, and an *irreducible
+component* (formerly *quantity*) is the set of functionals whose accuracy is controlled
+together. `potsynth_channel` is now `potsynth_functional`, `nchan` is `nfunc` (in
+`potsynth_alloc` and `potsynth_info`) and the Python `Channel` is `Functional`; the old
+type and class names, and `info["nchan"]` in Python, remain as deprecated aliases.
+The front-ends keep `quantities` for the physical quantities they compute.
+
 First public release.
 
 ### Core
@@ -16,16 +24,16 @@ First public release.
 - Optimized direct sum (fused single-pass kernels) for low degrees and small point sets;
   `POTSYNTH_METHOD_AUTO` chooses between the two, including the set-up cost when
   `npts_hint` gives the expected number of points.
-- Generic channels (linear functionals of the potential), including the theta operators
+- Generic functionals (linear functionals of the potential), including the theta operators
   for gradient tensors. Results are exact at both poles: no division by sin(theta).
 - Radial basis weighted by exact mean squares over the sphere (vector spherical
-  harmonics): channels form quantities (scalar, horizontal vector, spin-2 tensor part),
-  and `eps` is relative to the largest magnitude of each quantity, e.g. B_theta and
-  B_phi relative to max |B_h|. One radial basis bounds the error of every quantity: its
-  rank is raised until each quantity's own error is within tolerance, so a quantity much
+  harmonics): functionals form irreducible components (scalar, horizontal vector, spin-2 tensor part),
+  and `eps` is relative to the largest magnitude of each irreducible component, e.g. B_theta and
+  B_phi relative to max |B_h|. One radial basis bounds the error of every irreducible component: its
+  rank is raised until each irreducible component's own error is within tolerance, so an irreducible component much
   smaller than the others at high degree (e.g. the horizontal gravity gradients of
   EGM2008) is resolved as well as they are.
-- The radial step bounds the maximum of each quantity's error over the sphere, not its
+- The radial step bounds the maximum of each irreducible component's error over the sphere, not its
   root mean square: by the addition theorem a degree-l part is at most sqrt(2l+1) times
   its rms anywhere. The rank and the Chebyshev degree are chosen with this bound within
   eps/2 (default `rank_tol`, was 0.1 eps), checked between the radial nodes too, with
@@ -33,13 +41,13 @@ First public release.
   thick shells at high degree, e.g. EGM2008 on 0-2000 km, get their full rank). This fixes errors of up to 50 eps for EGM2008
   on Earth's topographic surface (shells reaching inside r = a); satellite shells need
   one or two more radial functions.
-- Window width chosen per quantity and shell: the table measured for the magnetic field
-  is a lower bound, and the width is raised where a quantity has its power near the band
+- Window width chosen per irreducible component and shell: the table measured for the magnetic field
+  is a lower bound, and the width is raised where an irreducible component has its power near the band
   edge (where the window's aliasing error is largest; e.g. the horizontal gravity
-  gradients) or the shell reaches inside r = a (u > 1), so that every quantity meets
+  gradients) or the shell reaches inside r = a (u > 1), so that every irreducible component meets
   `eps`. Requests like the magnetic field at satellite altitude keep the table's width.
   After the set-up, an automatically chosen width is checked against the direct sum at
-  the points where its error is likely to be largest, and widened if any quantity
+  the points where its error is likely to be largest, and widened if any irreducible component
   exceeds `eps`.
 - Read-only model workspace shared between threads; evaluation does not allocate memory.
   OpenMP parallelism (optional).
@@ -59,12 +67,12 @@ First public release.
 - Model files (`potsynth_write`, `potsynth_read`): a model of the fast method is written
   after its set-up and read instead of being set up again.
 - The window check after the set-up tests each component against a direct sum of its
-  own channels, so its cost does not grow with the number of fields; the copy of the
+  own functionals, so its cost does not grow with the number of fields; the copy of the
   coefficients is freed after the set-up of a fast model.
 - `err_radial` and `err_check` in `potsynth_info`: the error bound of the radial basis
   and the largest error of the window check after set-up, so that a tolerance below
   the rounding floor (or a non-default `sigma`) no longer passes unnoticed.
-- In a model with several coefficient sets, the parts of a channel with the same
+- In a model with several coefficient sets, the parts of a functional with the same
   operator are combined before their power is taken, so that sets that nearly cancel
   (e.g. the difference of two epochs) get the radial basis and window of their sum, not
   of each set.
