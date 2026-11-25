@@ -1035,7 +1035,9 @@ Evaluation
      untouched, if any point has :math:`\theta \notin [0,\pi]` or :math:`r \le 0`;
      for the fast method, if :math:`r` lies outside :math:`[r_{min}, r_{max}]` or
      :math:`\theta` outside the colatitude range of the model; or, with radial functions
-     of the caller, if the functions refuse :math:`r`. Colatitudes up to
+     of the caller, if the functions refuse :math:`r`; for the direct method, if
+     :math:`(a/r)^{l_{max}+p}` would exceed about :math:`10^{304}` (a point far inside
+     the reference sphere at high degree, where the sum would overflow). Colatitudes up to
      :math:`10^{-6}` rad outside :math:`[0,\pi]` are accepted (the ends of a colatitude
      range stay strict, except at a pole),
      so that :math:`\pi` rounded to single precision is; both methods then give the

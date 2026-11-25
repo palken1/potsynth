@@ -242,8 +242,9 @@ eval_points(const size_t n, const double * r, const double * theta, const double
 
       if (status)
         {
-          POTSYNTH_ERROR ("theta outside [0,pi] or of the colatitude range, r <= 0, or r outside [rmin,rmax] "
-                          "or of the range of the radial functions", status);
+          POTSYNTH_ERROR ("theta outside [0,pi] or of the colatitude range, r <= 0, r outside [rmin,rmax] "
+                          "or of the range of the radial functions, or (direct method) r so far inside a "
+                          "that (a/r)^lmax overflows", status);
         }
 
       if (w->method == POTSYNTH_METHOD_FAST)
@@ -384,56 +385,100 @@ window_origin(const double theta, const double phi, long * l1, long * l2, const 
 #define EVAL_R(r, i)                 (((r) != NULL) ? (r)[i] : 1.0)
 
 /* validate all points before any output is written */
+/* check one point; scratch: nrad doubles for the radial functions of the caller;
+ * lnmax: largest log((a/r)^(lmax+p)) the direct sum can form without overflow */
+static int
+validate_point(const double ri, const double ti, const double pf, double * scratch,
+               const double lnmax, const potsynth_workspace * w)
+{
+  const double tmax = 1.0 + 1.0e-10;
+  if (!point_finite(ri, ti, pf))
+    return POTSYNTH_SUCCESS; /* NaN output, not an error */
+
+  if (ti < -POTSYNTH_THETA_TOL || ti > M_PI + POTSYNTH_THETA_TOL || !(ri > 0.0))
+    return POTSYNTH_EDOM;
+
+  /* direct method: (a/r)^l is a running product, which must not overflow for r < a */
+  if (w->method != POTSYNTH_METHOD_FAST && w->nrad == 0 && ri < w->a && log(w->a / ri) > lnmax)
+    return POTSYNTH_EDOM;
+
+  /* colatitude range of the stored grid rows: strict, except at an end that is a pole */
+  if (w->method == POTSYNTH_METHOD_FAST &&
+      (ti < w->th_lo - ((w->th_lo == 0.0) ? POTSYNTH_THETA_TOL : 0.0) ||
+       ti > w->th_hi + ((w->th_hi == M_PI) ? POTSYNTH_THETA_TOL : 0.0)))
+    return POTSYNTH_EDOM;
+
+  if (w->nrad > 0)
+    {
+      /* range of the radial functions of the caller */
+      size_t first, cnt;
+
+      if (potsynth_radial_eval(w, ri, &first, &cnt, scratch) != POTSYNTH_SUCCESS)
+        return POTSYNTH_EDOM;
+    }
+  else if (w->method == POTSYNTH_METHOD_FAST)
+    {
+      const potsynth_radial_workspace * rad = w->radial_workspace_p;
+      const double u = w->a / ri;
+
+      if (rad->ud > 0.0)
+        {
+          if (fabs((u - rad->uc) / rad->ud) > tmax)
+            return POTSYNTH_EDOM;
+        }
+      else if (fabs(u - rad->uc) > 1.0e-12 * rad->uc)
+        {
+          return POTSYNTH_EDOM;
+        }
+    }
+
+  return POTSYNTH_SUCCESS;
+}
+
+/* validate all points before any output is written; in parallel unless the model has
+ * radial functions of the caller (one scratch buffer; a Python function runs serially
+ * anyway) */
 static int
 validate(const size_t n, const double * r, const double * theta, const double * phi,
          potsynth_eval_workspace * ew)
 {
   const potsynth_workspace * w = ew->w;
-  const double tmax = 1.0 + 1.0e-10;
-  size_t i;
+  double lnmax = HUGE_VAL;
+  long i;
 
-  for (i = 0; i < n; ++i)
+  if (w->method != POTSYNTH_METHOD_FAST && w->nrad == 0)
     {
-      const double ri = EVAL_R(r, i);
+      /* (a/r)^(lmax + p) up to about 1e304, below DBL_MAX by a margin for the Legendre
+       * values it multiplies */
+      int maxpow = 0;
+      size_t c;
 
-      if (!point_finite(ri, theta[i], phi[i]))
-        continue; /* NaN output, not an error */
-
-      if (theta[i] < -POTSYNTH_THETA_TOL || theta[i] > M_PI + POTSYNTH_THETA_TOL || !(ri > 0.0))
-        return POTSYNTH_EDOM;
-
-      /* colatitude range of the stored grid rows: strict, except at an end that is a pole */
-      if (w->method == POTSYNTH_METHOD_FAST &&
-          (theta[i] < w->th_lo - ((w->th_lo == 0.0) ? POTSYNTH_THETA_TOL : 0.0) ||
-           theta[i] > w->th_hi + ((w->th_hi == M_PI) ? POTSYNTH_THETA_TOL : 0.0)))
-        return POTSYNTH_EDOM;
-
-      if (w->nrad > 0)
-        {
-          /* range of the radial functions of the caller */
-          size_t first, cnt;
-
-          if (potsynth_radial_eval(w, ri, &first, &cnt, ew->rscratch) != POTSYNTH_SUCCESS)
-            return POTSYNTH_EDOM;
-        }
-      else if (w->method == POTSYNTH_METHOD_FAST)
-        {
-          const potsynth_radial_workspace * rad = w->radial_workspace_p;
-          const double u = w->a / ri;
-
-          if (rad->ud > 0.0)
-            {
-              if (fabs((u - rad->uc) / rad->ud) > tmax)
-                return POTSYNTH_EDOM;
-            }
-          else if (fabs(u - rad->uc) > 1.0e-12 * rad->uc)
-            {
-              return POTSYNTH_EDOM;
-            }
-        }
+      for (c = 0; c < w->nchan; ++c)
+        maxpow = (w->rpow[c] > maxpow) ? w->rpow[c] : maxpow;
+      if (w->lmax + (size_t) maxpow > 0)
+        lnmax = 700.0 / (double) (w->lmax + (size_t) maxpow);
     }
 
-  return POTSYNTH_SUCCESS;
+  if (w->nrad > 0 || n < POTSYNTH_PAR_MIN || ew->nthreads <= 1)
+    {
+      for (i = 0; i < (long) n; ++i)
+        {
+          if (validate_point(EVAL_R(r, i), theta[i], phi[i], ew->rscratch, lnmax, w) != POTSYNTH_SUCCESS)
+            return POTSYNTH_EDOM;
+        }
+
+      return POTSYNTH_SUCCESS;
+    }
+  else
+    {
+      int bad = 0;
+
+#pragma omp parallel for private(i) schedule(static) num_threads(ew->nthreads) reduction(|:bad)
+      for (i = 0; i < (long) n; ++i)
+        bad |= (validate_point(EVAL_R(r, i), theta[i], phi[i], NULL, lnmax, w) != POTSYNTH_SUCCESS);
+
+      return bad ? POTSYNTH_EDOM : POTSYNTH_SUCCESS;
+    }
 }
 
 #ifdef POTSYNTH_HAVE_VECEXT
@@ -752,17 +797,19 @@ eval_fast(const size_t n, const double * r, const double * theta, const double *
       size_t i, k;
       long blk;
 
-      /* counting sort by grid block */
-      memset(ew->count, 0, (ew->nbins + 1) * sizeof(size_t));
-      for (i = 0; i < nc; ++i)
+      /* counting sort by grid block: the keys in parallel (each needs the window origin),
+       * the counts and the order serially, so the order does not depend on the threads */
+#pragma omp parallel for private(blk) schedule(static) num_threads(ew->nthreads) if (nc >= POTSYNTH_PAR_MIN)
+      for (blk = 0; blk < (long) nc; ++blk)
         {
+          const size_t ii = (size_t) blk;
           size_t key;
 
-          if (point_finite(EVAL_R(rc, i), tc[i], pc[i]))
+          if (point_finite(EVAL_R(rc, ii), tc[ii], pc[ii]))
             {
               long l1, l2;
 
-              window_origin(tc[i], reduce_phi(pc[i]), &l1, &l2, w);
+              window_origin(tc[ii], reduce_phi(pc[ii]), &l1, &l2, w);
               key = (size_t) (l1 - w->row_lo) / POTSYNTH_SORT_BLOCK * nbc +
                     (size_t) (l2 - w->col_lo) / POTSYNTH_SORT_BLOCK;
             }
@@ -771,9 +818,12 @@ eval_fast(const size_t n, const double * r, const double * theta, const double *
               key = ew->nbins - 1;
             }
 
-          ew->key[i] = (uint32_t) key;
-          ++(ew->count[key + 1]);
+          ew->key[ii] = (uint32_t) key;
         }
+
+      memset(ew->count, 0, (ew->nbins + 1) * sizeof(size_t));
+      for (i = 0; i < nc; ++i)
+        ++(ew->count[ew->key[i] + 1]);
 
       for (k = 0; k < ew->nbins; ++k)
         ew->count[k + 1] += ew->count[k];
@@ -820,10 +870,13 @@ eval_direct(const size_t n, const double * r, const double * theta, const double
   const potsynth_workspace * w = ew->w;
   const size_t nchan = w->nchan;
   const long nblk = (long) ((n + POTSYNTH_NB - 1) / POTSYNTH_NB);
+  /* units of 16 blocks keep the scheduling cost low for many points; a few thousand
+   * points (e.g. the window check after set-up) are shared out block by block */
+  const int unit = (nblk >= 64L * ew->nthreads) ? 16 : 1;
   int fail = 0;
   long blk;
 
-#pragma omp parallel for private(blk) schedule(dynamic, 16) num_threads(ew->nthreads) reduction(|:fail)
+#pragma omp parallel for private(blk) schedule(dynamic, unit) num_threads(ew->nthreads) reduction(|:fail)
   for (blk = 0; blk < nblk; ++blk)
     {
 #ifdef _OPENMP

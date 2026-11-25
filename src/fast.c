@@ -40,6 +40,8 @@
 #include "potsynth_internal.h"
 #include "pocketfft.h"
 
+#define FAST_ROWBLK 8 /* channels transformed together in the phi pass (fast_row()) */
+
 /* per-thread buffers */
 typedef struct
 {
@@ -53,7 +55,7 @@ typedef struct
   double * S;           /* quadrant sums, 4*nterm*nqp */
   double * H;           /* doubled-sphere function, Nt complex */
   double * Z;           /* fine theta grid of each pair, npair*nf1 complex */
-  double * R;           /* row transform buffer, nf2 */
+  double * R;           /* row transform buffer, FAST_ROWBLK*nf2 */
   double * pm;          /* s_j^(m-d) of the order being computed, d = 0, 1, 2: mantissa, 3*nqp */
   double * p2;          /* and its power of two (with the column scaling), or 0 if not a double */
   int * pe;             /* and its exponent (with the column scaling), 3*nqp */
@@ -410,7 +412,7 @@ fast_state_alloc(potsynth_workspace * w, fast_state_t * state)
       thread->S = potsynth_aligned_alloc(4 * state->nterm * state->nqp * sizeof(double));
       thread->H = potsynth_aligned_alloc(2 * state->Nt * sizeof(double));
       thread->Z = potsynth_aligned_alloc(2 * w->nch * w->nf1 * sizeof(double));
-      thread->R = potsynth_aligned_alloc(w->nf2 * sizeof(double));
+      thread->R = potsynth_aligned_alloc(FAST_ROWBLK * w->nf2 * sizeof(double));
       thread->pm = malloc(3 * state->nqp * sizeof(double));
       thread->p2 = malloc(3 * state->nqp * sizeof(double));
       thread->pe = malloc(3 * state->nqp * sizeof(int));
@@ -810,9 +812,14 @@ Notes:
 1) The grid is not zeroed at allocation: the Fourier slots above 2 mmax, which no
 order writes, are taken as zero here, and the padding channels nch..nchp-1 are
 set to zero
+2) The channels of a node are next to each other in the grid, so the channels are
+transformed in blocks of FAST_ROWBLK: a block is copied into contiguous rows of R
+(reading FAST_ROWBLK consecutive values per column), transformed and copied back.
+One channel at a time would read the whole row, which is larger than the caches at
+high degree, once per channel. The transforms are the same, so are the values
 
 Inputs: row   - stored row index
-        R     - buffer, length nf2
+        R     - buffer, length FAST_ROWBLK*nf2
         state - shared set-up data
         w     - workspace
 */
@@ -826,18 +833,36 @@ fast_row(const size_t row, double * R, const fast_state_t * state, potsynth_work
   double * g = w->grid + row * w->ncols * nchp;
   size_t q, k;
 
-  for (q = 0; q < w->nch; ++q)
+  for (q = 0; q < w->nch; q += FAST_ROWBLK)
     {
+      const size_t nb = (w->nch - q < FAST_ROWBLK) ? w->nch - q : FAST_ROWBLK;
+      size_t b;
       long col;
 
+      /* gather: column-major in the grid, one contiguous row of R per channel */
       for (k = 0; k < nf2; ++k)
-        R[k] = (k <= kmax) ? g[(size_t) ((long) k - w->col_lo) * nchp + q] : 0.0;
+        {
+          const double * gk = g + (size_t) ((long) k - w->col_lo) * nchp + q;
 
-      if (rfft_backward(state->p2, R, 1.0) != 0)
-        return POTSYNTH_ENOMEM;
+          for (b = 0; b < nb; ++b)
+            R[b * nf2 + k] = (k <= kmax) ? gk[b] : 0.0;
+        }
 
+      for (b = 0; b < nb; ++b)
+        {
+          if (rfft_backward(state->p2, R + b * nf2, 1.0) != 0)
+            return POTSYNTH_ENOMEM;
+        }
+
+      /* scatter, with the periodic padding columns */
       for (col = w->col_lo; col <= w->col_hi; ++col)
-        g[(size_t) (col - w->col_lo) * nchp + q] = R[floor_mod(col, (long) nf2)];
+        {
+          const size_t src = (size_t) floor_mod(col, (long) nf2);
+          double * gc = g + (size_t) (col - w->col_lo) * nchp + q;
+
+          for (b = 0; b < nb; ++b)
+            gc[b] = R[b * nf2 + src];
+        }
     }
 
   /* padding channels */

@@ -70,7 +70,8 @@ First public release.
   of each set.
 - Robustness: the free functions accept NULL, as `free()` does; colatitudes up to 1e-6 rad
   outside [0, pi] are accepted (pi in single precision), with the smooth continuation of
-  the field across the pole; CMake looks for Homebrew's libomp on macOS; `sigma` below 1 is rejected (it overflowed the grid); `potsynth_read`
+  the field across the pole; the direct method refuses a point where (a/r)^lmax would overflow
+  (it gave NaN); CMake looks for Homebrew's libomp on macOS; `sigma` below 1 is rejected (it overflowed the grid); `potsynth_read`
   checks the sizes in the file header (window inside the stored rows and columns, no
   overflow); a radial function of the caller that fails after the points were validated
   gives NaN for those points and an error, in C and Python (the exception of a Python

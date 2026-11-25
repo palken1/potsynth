@@ -40,6 +40,8 @@
 #define POTSYNTH_ALIGN               64     /* memory alignment in bytes */
 #define POTSYNTH_ALF_EXPMAX          960    /* scaled ALF columns stay below 2^EXPMAX */
 #define POTSYNTH_ALF_SCALEMAX        1000   /* largest power-of-2 column scaling (bounds the degree) */
+#define POTSYNTH_PAR_MIN             4096   /* points below which validation and sort keys run serially */
+
 /* colatitudes up to this far outside [0, pi] (or the colatitude range of a model) are
  * accepted, e.g. pi rounded to single precision (8.7e-8 above pi); both methods give
  * the smooth continuation of the field across the pole there */

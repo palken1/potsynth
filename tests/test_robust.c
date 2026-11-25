@@ -119,6 +119,35 @@ test_robust(void)
     potsynth_free(wdir);
   }
 
+  /* direct method: a point so far inside a that (a/r)^lmax overflows is refused
+   * (it gave NaN); one where it does not is evaluated */
+  {
+    const size_t L2 = 300;
+    double * c3 = test_random_coef(1, L2, L2);
+    potsynth_workspace * wd;
+
+    params.method = POTSYNTH_METHOD_DIRECT;
+    wd = potsynth_mag_alloc(1, L2, L2, c3, a, 0.0, 0.0, POTSYNTH_MAG_B, &params);
+    params.method = POTSYNTH_METHOD_FAST;
+    ps_test(wd == NULL, "robust: direct model at L = 300");
+    if (wd)
+      {
+        potsynth_eval_workspace * ed = potsynth_eval_alloc(0, wd);
+        double rr = a * exp(-3.0), tt = 1.0, pp = 0.5, o3[3];
+
+        test_last_error();
+        ps_test_int(potsynth_eval(1, &rr, &tt, &pp, o3, ed), POTSYNTH_EDOM,
+                    "robust: direct refuses (a/r)^300 = e^900");
+        test_last_error();
+        rr = 0.5 * a;
+        ps_test_int(potsynth_eval(1, &rr, &tt, &pp, o3, ed), POTSYNTH_SUCCESS, "robust: direct at r = a/2");
+        ps_test(!(isfinite(o3[0]) && isfinite(o3[1]) && isfinite(o3[2])), "robust: direct at r = a/2 finite");
+        potsynth_eval_free(ed);
+        potsynth_free(wd);
+      }
+    free(c3);
+  }
+
   /* achieved errors: within the tolerances for the automatic choice, -1 without a check */
   params.eps = 1e-10;
   w = potsynth_mag_alloc(1, L, L, gh, a, rmin, rmax, POTSYNTH_MAG_B | POTSYNTH_MAG_GRADB, &params);
