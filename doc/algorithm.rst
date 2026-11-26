@@ -151,11 +151,10 @@ The doubling also stops when it no longer cuts the tail by 4 times: the tail is 
 rounding, and the previous :math:`K` is kept.
 
 A one-sided Jacobi SVD, :math:`X = U S W^T`, gives singular values accurate to the
-level of rounding, which the machine-precision mode needs. The rank :math:`\rho` starts
-as the number of singular values above :math:`\tau_r s_1`, where
-:math:`\tau_r = \varepsilon/2` by default, and is then raised until a bound on the
-maximum error of each irreducible component on its own is within :math:`\tau_r/2` at the nodes and
-:math:`\tau_r` between them (see :ref:`radial-weights`). Then:
+level of rounding, which the machine-precision mode needs. The rank :math:`\rho` is the
+smallest number of singular vectors for which a bound on the maximum error of each
+irreducible component on its own, measured between the nodes too, is within
+:math:`\tau_r = \varepsilon/2` (by default; see :ref:`radial-weights`). Then:
 
 .. math::
 
@@ -308,42 +307,52 @@ example only :math:`\partial_\theta\bar{P}`), the weights are still the exact me
 squares of each degree, but different degrees are not orthogonal, and the bound holds
 only approximately.
 
-**Check of each irreducible component.** The singular value rule :math:`s_{\rho+1} \le \tau_r s_1` bounds
-the error of all weighted functions together, with the largest weight over the
-irreducible components. An irreducible component whose size sits mostly in degrees where another irreducible component
-dominates the weights is then covered only on average: for EGM2008 at degree 2190, the
-horizontal gravity gradients (:math:`(T_{r\theta}, T_{r\phi})` and the spin-2 part) have
-their largest values 300--600 times below :math:`T_{rr}` and much more of their size at
-high degree, and with the singular value rule alone their maximum error reaches
-:math:`2.6\varepsilon` at :math:`\varepsilon = 10^{-6}`. The rank is therefore raised,
-one function at a time, until for every irreducible component :math:`q`
+**Choice of the rank.** The truncated SVD bounds the error of all weighted functions
+together, with the largest weight over the irreducible components. An irreducible
+component whose size sits mostly in degrees where another dominates the weights is then
+covered only on average: for EGM2008 at degree 2190, the horizontal gravity gradients
+(:math:`(T_{r\theta}, T_{r\phi})` and the spin-2 part) have their largest values 300--600
+times below :math:`T_{rr}` and much more of their size at high degree. The rank is
+therefore chosen from a pointwise bound for each irreducible component :math:`q`,
 
 .. math::
 
-   \max_j \sum_l \sqrt{2l+1}\, W_{q,l}\, |e_{p,l}(u_j)|
-   \le \frac{\tau_r}{2} \max_j \Big( \sum_l W_{q,l}^2\, u_j^{2(l+p)} \Big)^{1/2},
+   B_{q,\rho}(u) = \sum_l \sqrt{2l+1}\, W_{q,l}\, |e_{p,l}(u)|, \qquad
+   \max_u B_{q,\rho}(u) \le \tau_r \max_u \Big( \sum_l W_{q,l}^2\, u^{2(l+p)} \Big)^{1/2},
 
-where :math:`e_{p,l}(u_j)` is the residual of :math:`u_j^{l+p}` after projection onto the
-first :math:`\rho` functions. By the addition theorem,
-:math:`\sum_m |{}_sY_{lm}|^2 = (2l+1)/4\pi` at every point of the sphere, also for the
-spin-weighted harmonics of the vector and tensor irreducible components, so a degree-:math:`l` part
-with root mean square :math:`W_{q,l}` over the sphere is at most
-:math:`\sqrt{2l+1}\,W_{q,l}` anywhere on it. The left side therefore bounds the maximum
-of the radial error of :math:`q` over the sphere at the worst node, in any coordinate
-system, and the right side is its largest root mean square in the shell, which is at most
-its largest magnitude. The residuals follow from the singular vectors at a cost of
-:math:`O(L K^2)` per irreducible component. :math:`\tau_r` is floored at
-:math:`16\,\epsilon_{\rm mach}`, below which the residuals are rounding, and a rank is
-also accepted when the bound is within 4 times its rounding floor, or has not fallen by 4
-times over the next 10 ranks (truncation errors fall by about ten per rank, rounding does
-not). The check never lowers the rank.
+where :math:`e_{p,l}(u)` is the error of :math:`u^{l+p}` with the first :math:`\rho`
+functions. By the addition theorem, :math:`\sum_m |{}_sY_{lm}|^2 = (2l+1)/4\pi` at every
+point of the sphere, also for the spin-weighted harmonics of the vector and tensor
+irreducible components, so a degree-:math:`l` part with root mean square :math:`W_{q,l}`
+over the sphere is at most :math:`\sqrt{2l+1}\,W_{q,l}` anywhere on it. The left side
+therefore bounds the maximum of the radial error of :math:`q` over the sphere at radius
+:math:`u`, in any coordinate system, and the right side is its largest root mean square in
+the shell, which is at most its largest magnitude.
 
-The residual peaks between the nodes, mostly next to the ends of the shell. After the
-build, the same bound is therefore evaluated with the final basis, as a Chebyshev series,
-at :math:`8 n_{\rm cheb} + 1` points of the shell. While it exceeds :math:`\tau_r`, the
-rank tolerance is tightened by the excess and :math:`K` doubled, until the bound meets
-:math:`\tau_r` or stops falling by at least 2 times (its rounding floor, which for
-EGM2008 on a shell reaching 21 km below :math:`r = a` is about :math:`4\times10^{-10}`).
+The bound is evaluated for every rank at once, with the basis as stored (Chebyshev
+series, double precision) at :math:`8 n_{\rm cheb} + 1` Chebyshev points of the shell, so it
+includes the error between the SVD nodes, where the residual peaks (mostly next to the
+ends of the shell), and the rounding of the expansion. Accumulating the partial sums rank
+by rank, all ranks cost about as much as one, :math:`O(L K^2)` per irreducible component.
+:math:`\rho` is the smallest rank within :math:`\tau_r`. On too few nodes the basis
+interpolates rather than compresses, and the smallest such rank may need more of them,
+so :math:`K` is then raised by about a quarter and the bounds measured again, while that
+lowers the rank. Doubling :math:`K` instead overshoots: near the rounding floor more nodes
+add rounding, and the smallest rank comes from the smallest :math:`K` that reaches it.
+
+When no rank reaches :math:`\tau_r`, the tolerance is below the rounding floor of the
+bound. The bound is a sum of absolute errors over all degrees, so its floor can lie well
+above :math:`\epsilon_{\rm mach}` and depends on the model and the shell: for EGM2008 at
+degree 2190 about :math:`5\times10^{-14}` for :math:`g` and :math:`T` on the GOCE shell,
+:math:`1\times10^{-12}` for :math:`g` from the surface to 1000 km, about
+:math:`10^{-10}` for :math:`g` and :math:`T` from the surface to 50 km or more, and
+:math:`2\times10^{-10}` on a shell reaching 21 km below :math:`r = a`. (The errors of the
+field itself are much smaller: the bound adds the errors of all degrees in absolute
+value.) The basis is then taken at the knee of :math:`B_\rho`: truncation errors fall by
+more than 4 times per rank and rounding does not, so the knee is the smallest rank within
+4 times the smallest bound, followed by up to 4 more ranks where they halve the bound.
+The passes stop when one does not halve the smallest bound, and ``err_radial`` reports
+the bound of the basis returned.
 
 An earlier version bounded the root mean square in place of the maximum, with
 :math:`\tau_r = 0.1\varepsilon`, and compared summed (not root-sum-square) Chebyshev
@@ -355,6 +364,21 @@ sphere by more than 10. The bound above costs one or two radial functions more o
 satellite shells (for LCS-1 at :math:`10^{-6}`, 7 in place of 6; for EGM2008 at
 :math:`10^{-10}`, 10 in place of 8), and keeps EGM2008 on the surface within
 :math:`0.15\varepsilon`.
+
+The version before 0.1.0 took the rank from the singular values, raised it until the
+bound held at the nodes (accepting a rank whose bound had not fallen by 4 times over the
+next 3 ranks, or was within 4 times an estimated floor of :math:`64\,\epsilon_{\rm mach}`
+times the sum of the terms), then checked the bound between the nodes, tightening the
+rank tolerance and doubling :math:`K` until the bound stopped halving. A sweep of 2214
+cases against a brute-force reference (EGM2008 to degrees 360, 720 and 2190, LCS-1 and
+MF7; 246 shells from 25 km below :math:`r = a` to 3450 km above it;
+:math:`\varepsilon = 10^{-4}` to :math:`10^{-14}`) found its bound above an achievable
+:math:`\tau_r` in 332 cases, typically by 2 to 5 times (EGM2008 :math:`g` and :math:`T` on
+the GOCE shell at :math:`\varepsilon = 10^{-10}`: :math:`3\tau_r`), and up to 250 times
+above the floor at tight tolerances: its Chebyshev degree was too small for the rank, a
+plateau of one rank ended the refinement, and the stall test and floor estimate accepted
+early. The rule above leaves 17 of those cases above :math:`\tau_r`, all with
+:math:`\tau_r` within 3 times the floor, and takes less time.
 
 **Curl and divergence.** The approximation replaces :math:`u^{l+2}` in the radial
 and horizontal parts by the same function :math:`a_l(u) \approx u^{l+2}`. The result is

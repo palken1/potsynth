@@ -32,10 +32,11 @@ First public release.
   EGM2008) is resolved as well as they are.
 - The radial step bounds the maximum of each irreducible component's error over the sphere, not its
   root mean square: by the addition theorem a degree-l part is at most sqrt(2l+1) times
-  its rms anywhere. The rank and the Chebyshev degree are chosen with this bound within
-  eps/2 (default `rank_tol`, was 0.1 eps), checked between the radial nodes too, with
-  rounding-floor tests at high accuracy (applied only near the rounding level, so that
-  thick shells at high degree, e.g. EGM2008 on 0-2000 km, get their full rank). This fixes errors of up to 50 eps for EGM2008
+  its rms anywhere. The rank is the smallest whose bound, measured for every rank at once
+  on a fine set of radii (between the radial nodes too), is within eps/2 (default
+  `rank_tol`, was 0.1 eps); the Chebyshev degree is raised by about a quarter while that
+  lowers the rank. Below the rounding floor of the bound the basis is taken at the knee
+  of the bound, and `err_radial` reports it. This fixes errors of up to 50 eps for EGM2008
   on Earth's topographic surface (shells reaching inside r = a); satellite shells need
   one or two more radial functions.
 - Window width chosen per irreducible component and shell: the table measured for the magnetic field

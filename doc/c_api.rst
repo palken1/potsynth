@@ -1160,9 +1160,14 @@ Introspection
    - ``ncomp``, the number of irreducible components (``eps`` is relative to each);
    - ``err_radial``, the bound of the error of the radial basis over the shell, relative
      to the size of each component. It is at most ``rank_tol`` (default ``eps/2``) unless
-     the tolerance is below the double-precision floor of the bound (about
-     :math:`10^{-12}` for EGM2008 at degree 2190), which it then shows; -1 if not known
-     (radial functions of the caller, or a model read from a file);
+     the tolerance is below, or within a few times, the rounding floor of the bound,
+     which it then shows. The bound adds the errors of all degrees in absolute value,
+     so its floor depends on the model and the shell: for EGM2008 at degree 2190 from
+     about :math:`5\times10^{-14}` (:math:`g` and :math:`T` on a satellite shell) to
+     :math:`10^{-10}` (:math:`g` and :math:`T` from the surface upwards) and
+     :math:`2\times10^{-10}` on a shell reaching 21 km below :math:`r = a` (the errors of
+     the field itself are much smaller). -1 if not known (radial functions of the
+     caller, or a model read from a file);
    - ``err_check``, the largest error found by the window check after set-up, against the
      direct sum at the points where the window error is likely to be largest, relative to
      the size of each component. It is at most ``eps`` when the check passed; it can exceed

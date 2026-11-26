@@ -65,6 +65,7 @@ test_radial_error(const double u0, const double u1, const size_t lmin, const siz
 
 static void test_radial_quantities(void);
 static void test_radial_surface(void);
+static void test_radial_bound(void);
 
 static void
 test_radial(void)
@@ -118,6 +119,7 @@ test_radial(void)
 
   test_radial_quantities();
   test_radial_surface();
+  test_radial_bound();
 }
 
 /*
@@ -301,4 +303,229 @@ test_radial_surface(void)
     }
 
   free(wn);
+}
+
+/*
+test_radial_bound_ld()
+  Independent check of err_radial: the pointwise bound of the radial error,
+max over the components and over 801 equally spaced radii of
+B(u) = sum_l sqrt(2l+1) w_l |u^(l+p) - sum_i beta_il b_i(u)| relative to
+max_u (sum_l w_l^2 u^(2(l+p)))^(1/2), in long double (potsynth: double, on
+Chebyshev points)
+*/
+
+static double
+test_radial_bound_ld(const double u0, const double u1, const size_t lmin, const size_t lmax,
+                     const size_t nfunc, const int * rpow, const double * wn,
+                     const potsynth_radial_workspace * w)
+{
+  const size_t L1 = lmax + 1, ng = 800;
+  double worst = 0.0;
+  size_t c, c2, g, i, l;
+
+  for (c = 0; c < nfunc; ++c)
+    {
+      double bmax = 0.0, fmax2 = 0.0;
+      int rep = 0;
+
+      for (c2 = 0; c2 < c && !rep; ++c2)
+        rep = (rpow[c2] == rpow[c] &&
+               memcmp(wn + c2 * L1 + lmin, wn + c * L1 + lmin, (L1 - lmin) * sizeof(double)) == 0);
+      if (rep)
+        continue;
+
+      for (g = 0; g <= ng; ++g)
+        {
+          const double u = u0 + (u1 - u0) * g / (double) ng;
+          long double b[128], f, bsum = 0.0L, f2 = 0.0L;
+
+          for (i = 0; i < w->rho && i < 128; ++i)
+            b[i] = test_radial_eval(i, u, w);
+
+          f = powl((long double) u, (long double) ((long) lmin + rpow[c]));
+          for (l = lmin; l <= lmax; ++l, f *= u)
+            {
+              long double approx = 0.0L;
+
+              if (wn[c * L1 + l] == 0.0)
+                continue;
+              for (i = 0; i < w->rho && i < 128; ++i)
+                approx += (long double) w->beta[(c * w->rho + i) * L1 + l] * b[i];
+
+              bsum += sqrtl(2.0L * l + 1.0L) * fabsl((long double) wn[c * L1 + l] * (approx - f));
+              f2 += (long double) wn[c * L1 + l] * wn[c * L1 + l] * f * f;
+            }
+
+          bmax = fmax(bmax, (double) bsum);
+          fmax2 = fmax(fmax2, (double) f2);
+        }
+
+      if (fmax2 > 0.0)
+        worst = fmax(worst, bmax / sqrt(fmax2));
+    }
+
+  return worst;
+}
+
+/*
+test_radial_bound()
+  The documented bound of the radial step: err_radial <= rank_tol wherever a
+basis reaches it, for the functionals of the paper's GOCE benchmark, g and T of
+a Kaula model to L = 2190 (random coefficients of rms 1e-5/l^2, weights from
+potsynth_radial_weights() as in the set-up), on the GOCE shell 220-281 km.
+potsynth 6255bf0 returned err_radial at 10 to 46 times rank_tol here at
+eps = 1e-6 to 1e-11 (its Chebyshev degree was too small for the rank, and its
+refinement stopped after one pass that did not halve the bound); with EGM2008
+the server rerun of 2026-11-26 found 1.9 eps at eps = 1e-10. Also: the rank does not fall
+as eps is tightened; err_radial agrees with an independent long double bound
+(between the Chebyshev points too); a thick shell (0-2000 km, g); and two
+shells whose bound has a rounding floor above rank_tol (inside r = a, and
+eps = 1e-14), where the rank must stay near the knee of the bound rather than
+grow towards the number of nodes.
+*/
+
+static void
+test_radial_bound(void)
+{
+  const size_t L = 2190, L1 = L + 1;
+  const double GM = 3.986004415e14, a = 6378136.3;
+  const double epss[] = { 1e-6, 1e-8, 1e-9, 1e-10, 1e-11 };
+  double * coef = malloc(L1 * L1 * sizeof(double));
+  potsynth_parameters params = potsynth_default_parameters();
+  uint64_t state = 2026;
+  size_t l, it, lastrho = 0;
+  long m;
+  int k;
+
+  if (coef == NULL)
+    {
+      ps_test(1, "radial bound: allocation");
+      return;
+    }
+
+  /* Kaula model: normal random coefficients (Box-Muller), rms 1e-5/l^2, C00 = 1 */
+  coef[0] = 1.0;
+  for (l = 1; l <= L; ++l)
+    {
+      const double sig = (l == 1) ? 0.0 : 1.0e-5 / ((double) l * (double) l);
+
+      for (m = -(long) l; m <= (long) l; ++m)
+        {
+          double u1, u2;
+
+          state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+          u1 = ((double) (state >> 11) + 0.5) / 9007199254740992.0;
+          state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+          u2 = ((double) (state >> 11) + 0.5) / 9007199254740992.0;
+          coef[l * (l + 1) + m] = sig * sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+        }
+    }
+
+  params.method = POTSYNTH_METHOD_DIRECT;
+  params.nthreads = 1;
+
+  for (k = 0; k < 2; ++k)
+    {
+      /* k = 0: g and T; k = 1: g */
+      const int q = (k == 0) ? (POTSYNTH_GRAV_G | POTSYNTH_GRAV_T) : POTSYNTH_GRAV_G;
+      potsynth_workspace * w = potsynth_grav_alloc(0, L, L, coef, GM, a, a, a, q, &params);
+      double * wn;
+
+      ps_test(w == NULL, "radial bound: model %d", k);
+      if (w == NULL)
+        continue;
+
+      wn = malloc(w->nfunc * L1 * sizeof(double));
+      potsynth_radial_weights(w, 1, wn);
+
+      if (k == 0)
+        {
+          const double u0 = a / (a + 281.0e3), u1 = a / (a + 220.0e3);
+
+          /* GOCE shell, eps = 1e-6 .. 1e-11 */
+          for (it = 0; it < sizeof(epss) / sizeof(epss[0]); ++it)
+            {
+              const double tol = 0.5 * epss[it];
+              potsynth_radial_workspace * rw = potsynth_radial_alloc(u0, u1, 0, L, w->nfunc, w->rpow, wn, tol);
+
+              ps_test(rw == NULL, "radial bound: GOCE g,T eps=%g allocation", epss[it]);
+              if (rw == NULL)
+                continue;
+
+              ps_test(!(rw->err > 0.0 && rw->err <= tol),
+                      "radial bound: GOCE g,T eps=%g rho=%zu err_radial %.2e <= rank_tol %.0e",
+                      epss[it], rw->rho, rw->err, tol);
+              ps_test(rw->rho < lastrho, "radial bound: GOCE g,T rank %zu does not fall as eps tightens",
+                      rw->rho);
+              lastrho = rw->rho;
+
+              if (epss[it] == 1e-10)
+                {
+                  const double ind = test_radial_bound_ld(u0, u1, 0, L, w->nfunc, w->rpow, wn, rw);
+                  ps_test(!(ind <= 1.1 * rw->err && ind >= 0.5 * rw->err),
+                          "radial bound: GOCE g,T independent bound %.2e, err_radial %.2e", ind, rw->err);
+                }
+
+              potsynth_radial_free(rw);
+            }
+
+          /* rounding floor above rank_tol: inside r = a (the topographic surface, floor
+           * about 2e-10), and eps = 1e-14 on the GOCE shell (floor about 3e-13); the
+           * rank stays near the knee of the bound instead of growing with the number of
+           * nodes (at eps = 1e-14 it is 31, against 13 at the knee of eps = 1e-13: the
+           * first pass starts at a larger Chebyshev degree) */
+          {
+            const double s0[2] = { a / (a + 8.9e3), u0 }, s1[2] = { a / (a - 21.8e3), u1 };
+            const size_t rmax[2] = { 20, 40 };
+            int j;
+
+            for (j = 0; j < 2; ++j)
+              {
+                const double tol = (j == 0) ? 5e-11 : 5e-15;
+                potsynth_radial_workspace * rw =
+                  potsynth_radial_alloc(s0[j], s1[j], 0, L, w->nfunc, w->rpow, wn, tol);
+
+                ps_test(rw == NULL, "radial bound: floor case %d allocation", j);
+                if (rw == NULL)
+                  continue;
+                ps_test(!(rw->rho <= rmax[j] && rw->err > 0.0 && rw->err < 1e-8),
+                        "radial bound: floor case %d rho=%zu (at most %zu) err_radial %.2e", j, rw->rho,
+                        rmax[j], rw->err);
+                potsynth_radial_free(rw);
+              }
+          }
+        }
+      else
+        {
+          /* thick shell 0-2000 km, g (the rounding floor of this model's bound there is
+           * 5.3e-11, so eps = 1e-9 is the tightest well above it) */
+          const double u0 = a / (a + 2000.0e3), u1 = 1.0;
+          const double e2[2] = { 1e-6, 1e-9 };
+
+          for (it = 0; it < 2; ++it)
+            {
+              const double tol = 0.5 * e2[it];
+              potsynth_radial_workspace * rw = potsynth_radial_alloc(u0, u1, 0, L, w->nfunc, w->rpow, wn, tol);
+
+              ps_test(rw == NULL, "radial bound: thick shell eps=%g allocation", e2[it]);
+              if (rw == NULL)
+                continue;
+              ps_test(!(rw->err > 0.0 && rw->err <= tol),
+                      "radial bound: thick shell g eps=%g rho=%zu err_radial %.2e <= rank_tol %.0e", e2[it],
+                      rw->rho, rw->err, tol);
+              if (it == 1)
+                {
+                  const double ind = test_radial_bound_ld(u0, u1, 0, L, w->nfunc, w->rpow, wn, rw);
+                  ps_test(!(ind <= 1.1 * rw->err && ind >= 0.5 * rw->err),
+                          "radial bound: thick shell independent bound %.2e, err_radial %.2e", ind, rw->err);
+                }
+              potsynth_radial_free(rw);
+            }
+        }
+
+      free(wn);
+      potsynth_free(w);
+    }
+
+  free(coef);
 }

@@ -1077,7 +1077,7 @@ potsynth_radial_tol()
   Relative tolerance of the radial step: rank_tol, or eps/2 by default (the
 other half of the error budget goes to the window), and at least 1e-16. The
 radial basis bounds the maximum of each component's radial error over the shell
-by it (see radial_rank_check() in radial.c)
+by it where the rounding floor allows (see potsynth_radial_alloc() in radial.c)
 */
 
 double

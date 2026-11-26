@@ -91,7 +91,7 @@ typedef struct
   double * basis;       /* Chebyshev coefficients, basis[i*ncheb + k] */
   double * beta;        /* expansion coefficients, beta[(c*rho + i)*(lmax+1) + l] */
   double err;           /* bound of the radial error relative to the size of each component
-                           (radial_direct_check()); -1 if not known */
+                           (radial_rank_bounds()); -1 if not known */
 } potsynth_radial_workspace;
 
 struct potsynth_workspace

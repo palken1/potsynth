@@ -6,7 +6,8 @@
  * The radial factors u^(l+rpow), u = a/r, l = lmin..lmax, are sampled at K+1
  * Chebyshev-Lobatto points of [u0, u1], weighted by the size of their
  * contribution to the field, and compressed with an SVD into rho functions
- * b_i(u), stored as Chebyshev series:
+ * b_i(u), stored as Chebyshev series (the rank rho is the smallest whose pointwise
+ * error bound, measured between the nodes too, is within the tolerance):
  *
  * u^(l+rpow_c) ~ \sum_{i=0}^{rho-1} beta_{c,i,l} b_i(u)
  *
@@ -49,12 +50,9 @@ static void cheb_coeffs(const size_t K, const double * f, const double * ct, dou
 static double radial_sample(const double uc, const double ud, radial_state_t * state);
 static int radial_build(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
                         const double * wn, const double tol, const int maxpow, const size_t kmin,
-                        const double rtol, potsynth_radial_workspace * w, radial_state_t * state);
-static double radial_direct_check(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
-                                  const double * wn, const potsynth_radial_workspace * w);
-static int radial_rank_check(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
-                             const double * wn, const double tol, const radial_state_t * state,
-                             size_t * rho);
+                        potsynth_radial_workspace * w, radial_state_t * state);
+static int radial_rank_bounds(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
+                              const double * wn, const potsynth_radial_workspace * w, double * B);
 
 /* first functional with the radial power of functional c (c itself if none before) */
 static size_t
@@ -167,82 +165,179 @@ potsynth_radial_alloc(const double u0, const double u1, const size_t lmin, const
     }
 
   {
-    /* build, then check the pointwise radial error on a fine set of radii (between the
-     * nodes too). The truncated residual peaks between the nodes, mostly next to the ends
-     * of the shell, so the bound there can exceed the one at the nodes; while it exceeds
-     * tol, tighten the rank tolerance by the excess and double the polynomial degree,
-     * until the bound stops falling (rounding) */
-    size_t kmin = 0, iter;
-    double rtol = 0.5 * tol, prev = HUGE_VAL;
-    /* the basis with the smallest bound of the passes so far (the later one if they are
-     * equal), kept aside so that a basis is returned even when the loop ends after 8
-     * passes; near the rounding floor a later pass can be marginally worse */
-    double * bbasis = NULL, * bbeta = NULL, best = HUGE_VAL;
-    size_t brho = 0, bncheb = 0;
+    /* rank selection: build a basis of full rank (all K+1 singular vectors) on K+1
+     * Chebyshev nodes, measure the pointwise bound B_r of every rank r on a fine set of
+     * radii (radial_rank_bounds, between the nodes too), and take the smallest rank with
+     * B_r <= tol. Then raise K by about a quarter and repeat while that lowers the rank:
+     * too few nodes give a basis that interpolates rather than compresses, and near the
+     * rounding floor more nodes only add rounding, so the smallest rank comes from the
+     * smallest K that reaches it.
+     *
+     * If no rank reaches tol (the bound's rounding floor is above it), the basis is taken
+     * at the knee of B_r: truncation errors fall by more than 4 times per rank and
+     * rounding does not, so the knee is the smallest rank within 4 times the smallest
+     * bound, followed by up to 4 more ranks when they halve the bound. The passes stop
+     * when a pass does not halve the smallest bound. w->err is the bound of the basis
+     * returned, which is above tol only in that case. */
+    const size_t Kmax = (size_t) ((long) lmax + maxpow);
+    size_t kmin = 0, iter, r;
+    double prevmin = HUGE_VAL;
+    /* candidates over the passes: the smallest rank within tol (t), and the floor
+     * candidate (f) */
+    potsynth_radial_workspace tc = { 0 }, fc = { 0 };
+    size_t trho = 0, prev_trho = 0, frho = 0;
+    double terr = 0.0, ferr = 0.0, fmin_ = HUGE_VAL;
 
-    for (iter = 0; iter < 8; ++iter)
+    for (iter = 0; iter < 16; ++iter)
       {
-        double ratio = 0.0;
-        size_t Kused;
+        double bmin = HUGE_VAL, * B;
+        size_t Kused, R, rt = 0, rf = 0;
+        int keep_t, keep_f;
 
         memset(&state, 0, sizeof(radial_state_t));
-        status = radial_build(lmin, lmax, nfunc, rpow, wn, tol, maxpow, kmin, rtol, w, &state);
+        status = radial_build(lmin, lmax, nfunc, rpow, wn, tol, maxpow, kmin, w, &state);
         Kused = state.K;
         radial_state_free(&state);
 
-        if (status == POTSYNTH_SUCCESS)
-          {
-            ratio = radial_direct_check(lmin, lmax, nfunc, rpow, wn, w);
-            if (ratio < 0.0)
-              status = POTSYNTH_ENOMEM; /* reported below */
-          }
+        R = w->rho;
+        B = (status == POTSYNTH_SUCCESS) ? malloc(R * sizeof(double)) : NULL;
+        if (status == POTSYNTH_SUCCESS && (B == NULL || radial_rank_bounds(lmin, lmax, nfunc, rpow, wn, w, B)))
+          status = POTSYNTH_ENOMEM;
 
         if (status)
           {
-            potsynth_aligned_free(bbasis);
-            potsynth_aligned_free(bbeta);
+            free(B);
+            potsynth_aligned_free(tc.basis);
+            potsynth_aligned_free(tc.beta);
+            potsynth_aligned_free(fc.basis);
+            potsynth_aligned_free(fc.beta);
             potsynth_radial_free(w);
             if (status == POTSYNTH_ENOMEM)
               {
-                POTSYNTH_ERROR_NULL ("unable to allocate the radial check", POTSYNTH_ENOMEM);
+                POTSYNTH_ERROR_NULL ("unable to allocate the radial basis", POTSYNTH_ENOMEM);
               }
             return NULL;
           }
 
-        if (bbasis == NULL || !(ratio > best))
-          {
-            potsynth_aligned_free(bbasis);
-            potsynth_aligned_free(bbeta);
-            bbasis = w->basis;
-            bbeta = w->beta;
-            brho = w->rho;
-            bncheb = w->ncheb;
-            best = ratio;
-          }
-        else
-          {
-            potsynth_aligned_free(w->basis);
-            potsynth_aligned_free(w->beta);
-          }
+        for (r = 0; r < R; ++r)
+          bmin = fmin(bmin, B[r]);
+        for (r = 0; r < R && !rt; ++r)
+          if (B[r] <= tol)
+            rt = r + 1;
+        {
+          /* knee, then up to 4 more ranks that halve the bound */
+          size_t rk = 0;
+          double m2 = HUGE_VAL;
+          for (r = 0; r < R && !rk; ++r)
+            if (B[r] <= 4.0 * bmin)
+              rk = r + 1;
+          for (r = 0; r < R && r < rk + 4; ++r)
+            m2 = fmin(m2, B[r]);
+          for (r = 0; r < R && !rf; ++r)
+            if (B[r] <= 2.0 * m2)
+              rf = r + 1;
+        }
 
+        keep_t = (rt > 0 && (trho == 0 || rt < trho));
+        keep_f = (frho == 0 || bmin < 0.5 * fmin_ || (rf < frho && B[rf - 1] <= 2.0 * fmin_));
+
+        /* keep the candidates of this pass (each owns a copy of the full basis) */
+        if (keep_t || keep_f)
+          {
+            potsynth_radial_workspace * dst[2];
+            size_t nd = 0, d;
+            if (keep_t)
+              dst[nd++] = &tc;
+            if (keep_f)
+              dst[nd++] = &fc;
+            for (d = 0; d < nd; ++d)
+              {
+                potsynth_aligned_free(dst[d]->basis);
+                potsynth_aligned_free(dst[d]->beta);
+                dst[d]->basis = potsynth_aligned_alloc(R * w->ncheb * sizeof(double));
+                dst[d]->beta = potsynth_aligned_alloc(nfunc * R * L1 * sizeof(double));
+                if (!dst[d]->basis || !dst[d]->beta)
+                  {
+                    status = POTSYNTH_ENOMEM;
+                    break;
+                  }
+                memcpy(dst[d]->basis, w->basis, R * w->ncheb * sizeof(double));
+                memcpy(dst[d]->beta, w->beta, nfunc * R * L1 * sizeof(double));
+                dst[d]->rho = R;
+                dst[d]->ncheb = w->ncheb;
+              }
+            if (keep_t)
+              {
+                trho = rt;
+                terr = B[rt - 1];
+              }
+            if (keep_f)
+              {
+                frho = rf;
+                ferr = B[rf - 1];
+              }
+          }
+        fmin_ = fmin(fmin_, bmin);
+        free(B);
+        potsynth_aligned_free(w->basis);
+        potsynth_aligned_free(w->beta);
         w->basis = NULL;
         w->beta = NULL;
 
-        if (ratio <= tol || ratio > 0.5 * prev)
+        if (status)
+          {
+            potsynth_aligned_free(tc.basis);
+            potsynth_aligned_free(tc.beta);
+            potsynth_aligned_free(fc.basis);
+            potsynth_aligned_free(fc.beta);
+            potsynth_radial_free(w);
+            POTSYNTH_ERROR_NULL ("unable to allocate the radial basis", POTSYNTH_ENOMEM);
+          }
+
+        /* stop: no more nodes to add; a rank within tol that more nodes did not lower;
+         * or no rank within tol and a pass that did not halve the smallest bound */
+        if (Kused >= Kmax)
+          break;
+        if (trho && prev_trho && !(trho < prev_trho))
+          break;
+        if (!trho && iter > 0 && !(bmin < 0.5 * prevmin))
           break;
 
-        prev = ratio;
-        rtol *= 0.5 * tol / ratio;
-        if (Kused < (size_t) ((long) lmax + maxpow) && iter > 0)
-          kmin = 2 * Kused;
+        prev_trho = trho;
+        prevmin = fmin(prevmin, bmin);
+        kmin = (Kused + 2 > (5 * Kused + 3) / 4) ? Kused + 2 : (5 * Kused + 3) / 4;
       }
 
-    /* after at most 8 passes, the best basis (never none) */
-    w->basis = bbasis;
-    w->beta = bbeta;
-    w->rho = brho;
-    w->ncheb = bncheb;
-    w->err = best;
+    /* the chosen rank: its basis functions and coefficients */
+    {
+      potsynth_radial_workspace * cand = trho ? &tc : &fc;
+      const size_t rho = trho ? trho : frho, R0 = cand->rho, nc = cand->ncheb;
+
+      w->basis = potsynth_aligned_alloc(rho * nc * sizeof(double));
+      w->beta = potsynth_aligned_alloc(nfunc * rho * L1 * sizeof(double));
+      if (w->basis && w->beta)
+        {
+          memcpy(w->basis, cand->basis, rho * nc * sizeof(double));
+          for (c = 0; c < nfunc; ++c)
+            {
+              size_t i;
+              for (i = 0; i < rho; ++i)
+                memcpy(w->beta + (c * rho + i) * L1, cand->beta + (c * R0 + i) * L1, L1 * sizeof(double));
+            }
+          w->rho = rho;
+          w->ncheb = nc;
+          w->err = trho ? terr : ferr;
+        }
+      potsynth_aligned_free(tc.basis);
+      potsynth_aligned_free(tc.beta);
+      potsynth_aligned_free(fc.basis);
+      potsynth_aligned_free(fc.beta);
+      if (!w->basis || !w->beta)
+        {
+          potsynth_radial_free(w);
+          POTSYNTH_ERROR_NULL ("unable to allocate the radial basis", POTSYNTH_ENOMEM);
+        }
+    }
   }
 
   return w;
@@ -550,7 +645,7 @@ Inputs: uc    - center of u interval
 Return: tail measure sum_f sqrt(2 l_f + 1) (|a_{K-1}| + |a_K|) relative to
         max_j (sum_f f(u_j)^2)^(1/2), with l_f the power of function f (the
         sqrt(2l+1) factor bounds the maximum over the sphere, see
-        radial_rank_check())
+        radial_rank_bounds())
 */
 
 static double
@@ -615,16 +710,18 @@ Inputs: lmin   - minimum SH degree
         nfunc  - number of functionals
         rpow   - radial power offsets, length nfunc
         wn     - weights, wn[c*(lmax+1) + l]
-        tol    - truncation tolerance
+        tol    - truncation tolerance (Chebyshev degree and trailing terms)
         maxpow - largest rpow
-        w      - (output) radial workspace
+        kmin   - smallest Chebyshev degree K
+        w      - (output) radial workspace: all K+1 singular vectors (rho = K+1);
+                 the caller chooses the rank
         state  - temporary arrays
 */
 
 static int
 radial_build(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
              const double * wn, const double tol, const int maxpow, const size_t kmin,
-             const double rtol, potsynth_radial_workspace * w, radial_state_t * state)
+             potsynth_radial_workspace * w, radial_state_t * state)
 {
   const size_t L1 = lmax + 1;
   const size_t Kmax = (size_t) ((long) lmax + maxpow); /* exact polynomial degree */
@@ -771,21 +868,7 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nfunc, const int
   if (status)
     return status;
 
-  rho = 0;
-  for (i = 0; i <= K; ++i)
-    {
-      if (state->sv[i] > tol * state->sv[0])
-        ++rho;
-    }
-
-  if (rho == 0)
-    rho = 1;
-
-  /* the rank above bounds the error of all components together; raise it until
-   * each component's own error is within tol */
-  status = radial_rank_check(lmin, lmax, nfunc, rpow, wn, rtol, state, &rho);
-  if (status)
-    return status;
+  rho = K + 1; /* all singular vectors: the caller chooses the rank */
 
   /* basis functions b_i(u_j) = U_ji / sqrt(c_j), U_ji = V[i*(K+1) + j] */
   w->basis = potsynth_aligned_calloc(rho * (K + 1) * sizeof(double));
@@ -872,264 +955,149 @@ radial_build(const size_t lmin, const size_t lmax, const size_t nfunc, const int
 }
 
 /*
-radial_rank_check()
-  Smallest rank, at least *rho, at which the radial error of each component is
-within tol of its own size
+radial_rank_bounds()
+  Pointwise bound of the radial error of every rank, relative to the size of each
+component, on a fine set of radii
 
-Inputs: lmin   - minimum SH degree
-        lmax   - maximum SH degree
-        nfunc  - number of functionals
-        rpow   - radial power offsets, length nfunc
-        wn     - weights, wn[c*(lmax+1) + l]
-        tol    - truncation tolerance
-        state  - state after the SVD (nodes, Lobatto weights, V)
-        rho    - (input/output) rank
+Inputs: lmin  - minimum SH degree
+        lmax  - maximum SH degree
+        nfunc - number of functionals
+        rpow  - radial power offsets, length nfunc
+        wn    - weights, wn[c*(lmax+1) + l]
+        w     - radial basis of rank w->rho
+        B     - (output) B[r-1], r = 1..w->rho: largest bound over the components with
+                the first r basis functions
+
+Return: 0, or -1 if memory could not be allocated
 
 Notes:
-1) An irreducible component is a set of functionals with the same radial power and weights.
-By the addition theorem (also for spin-weighted harmonics), a degree-l part
-with rms wn_l over the sphere is at most sqrt(2l+1) wn_l anywhere on it, so
-the error of the component at node u_j is at most
-B(u_j) = sum_l sqrt(2l+1) wn_l |e_l(u_j)|, with e_l the residual of u^(l+rpow)
-after projection onto the first rho basis functions, at every point of the
-sphere and in any coordinate system. Its rms at u_j is
-F(u_j) = (sum_l wn_l^2 u_j^(2(l+rpow)))^(1/2), at most its largest magnitude.
-The rank is raised until max_j B(u_j) <= tol * max_j F(u_j) for every
-component: the worst point of the shell, relative to the largest rms size of
-the component in the shell.
-2) The singular value rule bounds only the error of all functions together,
-weighted by the largest weight over the components, so a component much smaller
-than the others at high degree (e.g. the horizontal gravity gradients) can
-exceed it.
-3) tol is floored at 16 DBL_EPSILON, below which the residuals are rounding.
-The rank is also accepted when B is within 4 times its rounding floor
-64 DBL_EPSILON max_j sum_l sqrt(2l+1) wn_l u_j^(l+rpow), or when it has not
-fallen by 4 times within the next 3 ranks (truncation errors fall by 3 to 10
-times per rank, rounding does not).
+1) An irreducible component is a set of functionals with the same radial power and
+weights. By the addition theorem (also for spin-weighted harmonics), a degree-l part
+with rms w_l over the sphere is at most sqrt(2l+1) w_l anywhere on it, so the radial
+error of a component at u is at most
+B(u) = sum_l sqrt(2l+1) w_l |u^(l+p) - sum_{i<r} beta_il b_i(u)|, at every point of the
+sphere and in any coordinate system. B is relative to the size
+F = max_u (sum_l w_l^2 u^(2(l+p)))^(1/2), at most the largest magnitude of the component
+in the shell.
+2) B is evaluated with the basis as stored (Chebyshev series, double precision, as the
+fast method uses it) at 8 ncheb + 1 Chebyshev points of the shell, so it includes the
+error between the SVD nodes and the rounding of the expansion; its rounding floor is
+the floor of the radial step
+3) The partial sums over i are accumulated rank by rank, so all ranks cost about as
+much as one; the loops over the points are innermost (vectorized)
 */
 
 static int
-radial_rank_check(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
-                  const double * wn, const double tol, const radial_state_t * state,
-                  size_t * rho)
+radial_rank_bounds(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
+                   const double * wn, const potsynth_radial_workspace * w, double * B)
 {
-  const size_t L1 = lmax + 1;
-  const size_t K1 = state->K + 1;
-  const double tq = fmax(tol, 16.0 * DBL_EPSILON);
-  double * err1 = malloc((K1 + 1) * K1 * sizeof(double)); /* err1[r*K1 + j]: B(u_j) at rank r */
-  double * sum1 = malloc(K1 * sizeof(double)); /* sum_l sqrt(2l+1) |wn_l| u_j^(l+rpow) */
-  double * res = malloc(K1 * sizeof(double));
-  double * den = malloc(K1 * sizeof(double));
-  size_t c, j, l, r, need = *rho;
-
-  if (!err1 || !sum1 || !res || !den)
-    {
-      free(err1);
-      free(sum1);
-      free(res);
-      free(den);
-      POTSYNTH_ERROR ("unable to allocate rank check arrays", POTSYNTH_ENOMEM);
-    }
-
-  for (c = 0; c < nfunc; ++c)
-    {
-      const double * wc = wn + c * L1;
-      double fmax2 = 0.0, floor2 = 0.0;
-      if (radial_repeat(c, lmin, L1, rpow, wn))
-        continue; /* same component as an earlier functional */
-
-      memset(err1, 0, (K1 + 1) * K1 * sizeof(double));
-      memset(sum1, 0, K1 * sizeof(double));
-      memset(den, 0, K1 * sizeof(double));
-
-      for (l = lmin; l <= lmax; ++l)
-        {
-          const double w2 = wc[l] * wc[l];
-
-          if (w2 == 0.0)
-            continue;
-
-          /* residual of sqrt(c_j) u_j^(l+rpow), removing the basis vectors one at a time */
-          for (j = 0; j < K1; ++j)
-            {
-              const double f = pow(state->uj[j], (double) l + rpow[c]);
-
-              res[j] = state->sq[j] * f;
-              den[j] += w2 * f * f;
-              sum1[j] += sqrt(2.0 * l + 1.0) * fabs(wc[l]) * f;
-            }
-
-          for (r = 0; r <= K1; ++r)
-            {
-              const double * v = state->V + r * K1;
-              double beta = 0.0;
-
-              if (r >= *rho)
-                {
-                  for (j = 0; j < K1; ++j)
-                    err1[r * K1 + j] += sqrt(2.0 * l + 1.0) * fabs(wc[l] * res[j]) / state->sq[j];
-                }
-
-              if (r == K1)
-                break;
-
-              for (j = 0; j < K1; ++j)
-                beta += v[j] * res[j];
-
-              for (j = 0; j < K1; ++j)
-                res[j] -= beta * v[j];
-            }
-        }
-
-      for (j = 0; j < K1; ++j)
-        fmax2 = fmax(fmax2, den[j]);
-
-      {
-        /* rounding floor: each residual is rounded to about 16 DBL_EPSILON of its term,
-         * so the pointwise bound cannot fall below about 16 DBL_EPSILON max_j sum1_j;
-         * accept a rank within a factor 4 of that */
-        double s1 = 0.0;
-        for (j = 0; j < K1; ++j)
-          s1 = fmax(s1, sum1[j]);
-        floor2 = pow(64.0 * DBL_EPSILON * s1, 2);
-      }
-
-      for (r = *rho; r <= K1; ++r)
-        {
-          double emax2 = 0.0;
-          int stalled = 0;
-
-          for (j = 0; j < K1; ++j)
-            emax2 = fmax(emax2, err1[r * K1 + j] * err1[r * K1 + j]);
-
-          /* rounding: the bound has stopped decreasing (truncation errors fall by about a
-           * factor of ten per rank, rounding does not) */
-          if (r + 3 < K1)
-            {
-              /* smallest bound over the next 3 ranks (not up to the full basis, whose
-               * residual vanishes trivially) */
-              double later2 = HUGE_VAL;
-              size_t r2;
-              for (r2 = r + 1; r2 <= r + 3; ++r2)
-                {
-                  double e2 = 0.0;
-                  for (j = 0; j < K1; ++j)
-                    e2 = fmax(e2, err1[r2 * K1 + j] * err1[r2 * K1 + j]);
-                  later2 = fmin(later2, e2);
-                }
-              stalled = (emax2 <= 16.0 * later2);
-            }
-
-          if (emax2 <= fmax(tq * tq * fmax2, floor2) || stalled || r == K1)
-            {
-              need = (r > need) ? r : need;
-              break;
-            }
-        }
-    }
-
-  free(err1);
-  free(sum1);
-  free(res);
-  free(den);
-
-  *rho = need;
-
-  return POTSYNTH_SUCCESS;
-}
-
-/*
-radial_direct_check()
-  Largest pointwise bound of the radial error of any component on a fine set of
-radii, relative to the component's largest rms size in the shell
-
-Notes:
-1) By the addition theorem a degree-l part with rms w_l over the sphere is at
-most sqrt(2l+1) w_l anywhere, so the radial error of a component at u is at most
-B(u) = sum_l sqrt(2l+1) w_l |u^(l+p) - sum_i beta_il b_i(u)|. B is evaluated with
-the final basis (Chebyshev series as used at evaluation) at 8 ncheb + 1 points
-of the shell, so it includes the error between the SVD nodes.
-2) The size is F = max_u (sum_l w_l^2 u^(2(l+p)))^(1/2), at most the largest
-magnitude of the component in the shell.
-3) Returns -1 if memory could not be allocated.
-*/
-
-static double
-radial_direct_check(const size_t lmin, const size_t lmax, const size_t nfunc, const int * rpow,
-                    const double * wn, const potsynth_radial_workspace * w)
-{
-  const size_t L1 = lmax + 1;
-  const size_t rho = w->rho, nc = w->ncheb;
+  const size_t L1 = lmax + 1, R = w->rho, nc = w->ncheb;
   const size_t M = 8 * nc + 1;
-  double * bu = malloc(M * rho * sizeof(double));
+  double * bu = malloc(R * M * sizeof(double));  /* b_r at point m: bu[r*M + m] */
+  double * err = malloc(R * M * sizeof(double)); /* B of rank r+1 at point m */
+  double * uu = malloc(M * sizeof(double));
+  double * f = malloc(M * sizeof(double));
+  double * a = malloc(M * sizeof(double));
+  double * f2 = malloc(M * sizeof(double));
   double * T = malloc(nc * sizeof(double));
-  double worst = 0.0;
-  size_t c, m, i, k, l;
+  size_t c, m, i, k, l, r;
 
-  if (!bu || !T)
+  if (!bu || !err || !uu || !f || !a || !f2 || !T)
     {
       free(bu);
+      free(err);
+      free(uu);
+      free(f);
+      free(a);
+      free(f2);
       free(T);
-      return -1.0; /* out of memory */
+      return -1;
     }
+
+  for (r = 0; r < R; ++r)
+    B[r] = 0.0;
 
   for (m = 0; m < M; ++m)
     {
       const double t = cos(M_PI * (double) m / (double) (M - 1));
 
+      uu[m] = w->uc + w->ud * t;
       T[0] = 1.0;
       if (nc > 1)
         T[1] = t;
       for (k = 2; k < nc; ++k)
         T[k] = 2.0 * t * T[k - 1] - T[k - 2];
 
-      for (i = 0; i < rho; ++i)
+      for (i = 0; i < R; ++i)
         {
           double sum = 0.0;
           for (k = 0; k < nc; ++k)
             sum += w->basis[i * nc + k] * T[k];
-          bu[m * rho + i] = sum;
+          bu[i * M + m] = sum;
         }
     }
 
   for (c = 0; c < nfunc; ++c)
     {
       const double * wc = wn + c * L1;
-      double bmax = 0.0, fmax2 = 0.0;
+      double fmax2 = 0.0;
+
       if (radial_repeat(c, lmin, L1, rpow, wn))
-        continue;
+        continue; /* same component as an earlier functional */
 
-      for (m = 0; m < M; ++m)
+      memset(err, 0, R * M * sizeof(double));
+      memset(f2, 0, M * sizeof(double));
+
+      for (l = lmin; l <= lmax; ++l)
         {
-          const double u = w->uc + w->ud * cos(M_PI * (double) m / (double) (M - 1));
-          double b = 0.0, f2 = 0.0;
+          const double sw = sqrt(2.0 * l + 1.0) * fabs(wc[l]);
 
-          for (l = lmin; l <= lmax; ++l)
+          if (wc[l] == 0.0)
+            continue;
+
+          for (m = 0; m < M; ++m)
             {
-              const long double f = powl((long double) u, (long double) l + rpow[c]);
-              const double * beta = w->beta + (c * rho) * L1 + l;
-              long double a = 0.0L;
-
-              if (wc[l] == 0.0)
-                continue;
-
-              for (i = 0; i < rho; ++i)
-                a += (long double) beta[i * L1] * bu[m * rho + i];
-
-              b += sqrt(2.0 * l + 1.0) * fabs(wc[l]) * (double) fabsl(f - a);
-              f2 += wc[l] * wc[l] * f * f;
+              f[m] = pow(uu[m], (double) l + rpow[c]);
+              a[m] = 0.0;
+              f2[m] += wc[l] * wc[l] * f[m] * f[m];
             }
 
-          bmax = fmax(bmax, b);
-          fmax2 = fmax(fmax2, f2);
+          for (r = 0; r < R; ++r)
+            {
+              const double be = w->beta[(c * R + r) * L1 + l];
+              const double * b = bu + r * M;
+              double * e = err + r * M;
+
+              for (m = 0; m < M; ++m)
+                {
+                  a[m] += be * b[m];
+                  e[m] += sw * fabs(f[m] - a[m]);
+                }
+            }
         }
 
+      for (m = 0; m < M; ++m)
+        fmax2 = fmax(fmax2, f2[m]);
+
       if (fmax2 > 0.0)
-        worst = fmax(worst, bmax / sqrt(fmax2));
+        {
+          for (r = 0; r < R; ++r)
+            {
+              double bm = 0.0;
+              for (m = 0; m < M; ++m)
+                bm = fmax(bm, err[r * M + m]);
+              B[r] = fmax(B[r], bm / sqrt(fmax2));
+            }
+        }
     }
 
   free(bu);
+  free(err);
+  free(uu);
+  free(f);
+  free(a);
+  free(f2);
   free(T);
 
-  return worst;
+  return 0;
 }
